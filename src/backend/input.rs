@@ -231,6 +231,7 @@ pub struct PointerState {
     pub show_hide: bool,
     pub toggle_dashboard: bool,
     pub space_drag: bool,
+    pub space_fling: bool,
     pub space_rotate: bool,
     pub space_reset: bool,
     pub click_modifier_right: bool,

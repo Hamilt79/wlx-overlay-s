@@ -12,11 +12,14 @@ struct MoverData<T> {
     pose: Affine3A,
     hand: usize,
     hand_pose: T,
+    velocity: Vec3A,
 }
 
 pub(super) struct PlayspaceMover {
     last_transform: Affine3A,
     floor_offset: f32,
+    space_fling_enabled: bool,
+    momentum_velocity: Vec3A,
     drag: Option<MoverData<Vec3A>>,
     rotate: Option<MoverData<Quat>>,
 }
@@ -38,7 +41,8 @@ impl PlayspaceMover {
         Ok(Self {
             last_transform,
             floor_offset: 0.0,
-
+            space_fling_enabled: false,
+            momentum_velocity: Vec3A::ZERO,
             drag: None,
             rotate: None,
         })
@@ -101,6 +105,7 @@ impl PlayspaceMover {
                         pose: self.last_transform,
                         hand: i,
                         hand_pose,
+                        velocity: Vec3A::ZERO,
                     });
                     self.drag = None;
                     log::info!("Start space rotate");
@@ -112,6 +117,7 @@ impl PlayspaceMover {
         if let Some(mut data) = self.drag.take() {
             let pointer = &state.input_state.pointers[data.hand];
             if !pointer.now.space_drag {
+                self.momentum_velocity = data.velocity;
                 self.last_transform = data.pose;
                 log::info!("End space drag");
                 return;
@@ -122,7 +128,7 @@ impl PlayspaceMover {
                 .transform_point3a(state.input_state.pointers[data.hand].raw_pose.translation);
             let relative_pos =
                 (new_hand - data.hand_pose) * state.session.config.space_drag_multiplier;
-
+            data.velocity = relative_pos;
             if relative_pos.length_squared() > 1000.0 {
                 log::warn!("Space drag too fast, ignoring");
                 return;
@@ -152,11 +158,47 @@ impl PlayspaceMover {
                         pose: self.last_transform,
                         hand: i,
                         hand_pose: hand_pos,
+                        velocity: Vec3A::ZERO,
                     });
                     log::info!("Start space drag");
                     return;
                 }
             }
+        }
+
+        state
+            .input_state
+            .pointers
+            .iter()
+            .any(|p| p.now.space_fling && !p.before.space_fling)
+            .then(|| self.space_fling_enabled ^= true);
+
+        const FLOOR_Y: f32 = 0.0;
+        const FLING_STRENGTH: f32 = 2.0;
+        const CONSIDER_FLOOR: bool = false;
+
+        let user_is_interacting = state
+            .input_state
+            .pointers
+            .iter()
+            .any(|p| p.now.space_drag || p.now.space_rotate);
+
+        if !user_is_interacting && self.space_fling_enabled {
+
+            let mut new_pose = self.last_transform;
+            new_pose.translation += self.momentum_velocity * FLING_STRENGTH;
+
+            if CONSIDER_FLOOR && (new_pose.translation.y > FLOOR_Y) {
+                new_pose.translation.y = FLOOR_Y;
+                self.momentum_velocity = Vec3A::ZERO;
+            }
+
+            if new_pose.translation != self.last_transform.translation {
+                self.last_transform = new_pose;
+                self.apply_offset(new_pose, monado);
+            }
+        } else {
+            self.momentum_velocity = Vec3A::ZERO;
         }
     }
 

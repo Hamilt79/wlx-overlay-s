@@ -152,6 +152,7 @@ pub(super) struct OpenXrHandSource {
     show_hide: CustomClickAction,
     toggle_dashboard: CustomClickAction,
     space_drag: CustomClickAction,
+    space_fling: CustomClickAction,
     space_rotate: CustomClickAction,
     space_reset: CustomClickAction,
     modifier_right: CustomClickAction,
@@ -382,6 +383,11 @@ impl OpenXrHand {
                 .space_drag
                 .state(pointer.before.space_drag, xr, session)?;
 
+        pointer.now.space_fling =
+            self.source
+                .space_fling
+                .state(pointer.before.space_fling, xr, session)?;
+
         pointer.now.space_rotate =
             self.source
                 .space_rotate
@@ -425,6 +431,7 @@ impl OpenXrHandSource {
             show_hide: CustomClickAction::new(action_set, "show_hide", side)?,
             toggle_dashboard: CustomClickAction::new(action_set, "toggle_dashboard", side)?,
             space_drag: CustomClickAction::new(action_set, "space_drag", side)?,
+            space_fling: CustomClickAction::new(action_set, "space_fling", side)?,
             space_rotate: CustomClickAction::new(action_set, "space_rotate", side)?,
             space_reset: CustomClickAction::new(action_set, "space_reset", side)?,
             modifier_right: CustomClickAction::new(action_set, "click_modifier_right", side)?,
@@ -588,6 +595,14 @@ fn suggest_bindings(instance: &xr::Instance, hands: &[&OpenXrHandSource; 2]) {
         );
 
         add_custom!(
+            profile.space_fling,
+            &hands[0].space_fling,
+            &hands[1].space_fling,
+            bindings,
+            instance
+        );
+
+        add_custom!(
             profile.space_rotate,
             &hands[0].space_rotate,
             &hands[1].space_rotate,
@@ -656,6 +671,7 @@ struct OpenXrActionConfProfile {
     show_hide: Option<OpenXrActionConfAction>,
     toggle_dashboard: Option<OpenXrActionConfAction>,
     space_drag: Option<OpenXrActionConfAction>,
+    space_fling: Option<OpenXrActionConfAction>,
     space_rotate: Option<OpenXrActionConfAction>,
     space_reset: Option<OpenXrActionConfAction>,
     click_modifier_right: Option<OpenXrActionConfAction>,
