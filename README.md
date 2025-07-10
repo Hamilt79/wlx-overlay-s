@@ -1,3 +1,8 @@
+# Fork Notes/Changes
+
+Adds the ability to fling yourself using space drag. Similar to using OVR Advanced Settings and turning on Gravity and setting it to zero.
+Only works with OpenXR as of now because I don't use OpenVR. Might add it later.
+
 # WlxOverlay-S
 
 A lightweight OpenXR/OpenVR overlay for Wayland and X11 desktops, inspired by XSOverlay.
