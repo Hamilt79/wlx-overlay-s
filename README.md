@@ -1,7 +1,7 @@
 # Fork Notes/Changes
 
 Adds the ability to fling yourself using space drag. Similar to using OVR Advanced Settings and turning on Gravity and setting it to zero.
-Only works with OpenXR as of now because I don't use OpenVR. I might add it later.
+Confirmed works with OpenXR. It should work with OpenVR but I have not tested it.
 
 # WlxOverlay-S
 
