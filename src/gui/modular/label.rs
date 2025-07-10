@@ -53,6 +53,7 @@ pub enum LabelContent {
         charging_color: Arc<str>,
     },
     DragMultiplier,
+    DragFlingMultiplier,
     Ipd,
 }
 
@@ -82,6 +83,7 @@ pub enum LabelData {
         last_ipd: f32,
     },
     DragMultiplier,
+    DragFlingMultiplier,
 }
 
 pub fn modular_label_init(label: &mut ModularControl, content: &LabelContent, app: &AppState) {
@@ -156,6 +158,7 @@ pub fn modular_label_init(label: &mut ModularControl, content: &LabelContent, ap
         }
         LabelContent::Ipd => Some(LabelData::Ipd { last_ipd: -1. }),
         LabelContent::DragMultiplier => Some(LabelData::DragMultiplier),
+        LabelContent::DragFlingMultiplier => Some(LabelData::DragFlingMultiplier),
     };
 
     if let Some(state) = state {
@@ -300,6 +303,9 @@ pub(super) fn label_update(control: &mut ModularControl, _: &mut (), app: &mut A
         }
         LabelData::DragMultiplier => {
             control.set_text(&format!("{:.1}", app.session.config.space_drag_multiplier));
+        }
+        LabelData::DragFlingMultiplier => {
+            control.set_text(&format!("{:.1}", app.session.config.space_fling_multiplier));
         }
     }
 }

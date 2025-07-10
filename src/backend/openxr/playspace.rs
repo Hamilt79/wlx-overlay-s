@@ -173,8 +173,7 @@ impl PlayspaceMover {
             .any(|p| p.now.space_fling && !p.before.space_fling)
             .then(|| self.space_fling_enabled ^= true);
 
-        const FLOOR_Y: f32 = 0.0;
-        const FLING_STRENGTH: f32 = 2.0;
+        // const FLING_STRENGTH: f32 = 2.0;
         const CONSIDER_FLOOR: bool = false;
 
         let user_is_interacting = state
@@ -186,10 +185,10 @@ impl PlayspaceMover {
         if !user_is_interacting && self.space_fling_enabled {
 
             let mut new_pose = self.last_transform;
-            new_pose.translation += self.momentum_velocity * FLING_STRENGTH;
+            new_pose.translation += self.momentum_velocity * state.session.config.space_fling_multiplier;
 
-            if CONSIDER_FLOOR && (new_pose.translation.y > FLOOR_Y) {
-                new_pose.translation.y = FLOOR_Y;
+            if CONSIDER_FLOOR && (new_pose.translation.y > 0.0) {
+                new_pose.translation.y = 0.0;
                 self.momentum_velocity = Vec3A::ZERO;
             }
 

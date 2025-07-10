@@ -285,6 +285,9 @@ pub struct GeneralConfig {
     #[serde(default = "def_one")]
     pub space_drag_multiplier: f32,
 
+    #[serde(default = "def_one")]
+    pub space_fling_multiplier: f32,
+
     #[serde(default = "def_empty")]
     pub skybox_texture: Arc<str>,
 
@@ -461,6 +464,7 @@ pub struct AutoSettings {
     pub realign_on_showhide: bool,
     pub allow_sliding: bool,
     pub space_drag_multiplier: f32,
+    pub space_fling_multiplier: f32,
 }
 
 fn get_settings_path() -> PathBuf {
@@ -481,6 +485,7 @@ pub fn save_settings(config: &GeneralConfig) -> anyhow::Result<()> {
         realign_on_showhide: config.realign_on_showhide,
         allow_sliding: config.allow_sliding,
         space_drag_multiplier: config.space_drag_multiplier,
+        space_fling_multiplier: config.space_fling_multiplier,
     };
 
     let json = serde_json::to_string_pretty(&conf).unwrap(); // want panic

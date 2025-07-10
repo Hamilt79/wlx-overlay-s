@@ -180,6 +180,9 @@ pub enum ButtonAction {
     DragMultiplier {
         delta: f32,
     },
+    DragFlingMultiplier {
+        delta: f32,
+    },
     System {
         action: SystemAction,
     },
@@ -419,6 +422,9 @@ fn handle_action(action: &ButtonAction, press: &mut PressData, app: &mut AppStat
         ButtonAction::System { action } => run_system(action, app),
         ButtonAction::DragMultiplier { delta } => {
             app.session.config.space_drag_multiplier += delta;
+        }
+        ButtonAction::DragFlingMultiplier { delta } => {
+            app.session.config.space_fling_multiplier += delta;
         }
         ButtonAction::SendOscValue { parameter, values } => {
             #[cfg(feature = "osc")]
