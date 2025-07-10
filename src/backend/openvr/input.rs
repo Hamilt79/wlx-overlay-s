@@ -39,6 +39,7 @@ const PATH_MOVE_MOUSE: &str = "/actions/default/in/MoveMouse";
 const PATH_SCROLL: &str = "/actions/default/in/Scroll";
 const PATH_SHOW_HIDE: &str = "/actions/default/in/ShowHide";
 const PATH_SPACE_DRAG: &str = "/actions/default/in/SpaceDrag";
+const PATH_SPACE_FLING: &str = "/actions/default/in/SpaceFling";
 const PATH_SPACE_ROTATE: &str = "/actions/default/in/SpaceRotate";
 const PATH_TOGGLE_DASHBOARD: &str = "/actions/default/in/ToggleDashboard";
 
@@ -54,6 +55,7 @@ pub(super) struct OpenVrInputSource {
     show_hide_hnd: ActionHandle,
     toggle_dashboard_hnd: ActionHandle,
     space_drag_hnd: ActionHandle,
+    space_fling_hnd: ActionHandle,
     space_rotate_hnd: ActionHandle,
     click_modifier_right_hnd: ActionHandle,
     click_modifier_middle_hnd: ActionHandle,
@@ -79,6 +81,7 @@ impl OpenVrInputSource {
         let show_hide_hnd = input.get_action_handle(PATH_SHOW_HIDE)?;
         let toggle_dashboard_hnd = input.get_action_handle(PATH_TOGGLE_DASHBOARD)?;
         let space_drag_hnd = input.get_action_handle(PATH_SPACE_DRAG)?;
+        let space_fling_hnd = input.get_action_handle(PATH_SPACE_FLING)?;
         let space_rotate_hnd = input.get_action_handle(PATH_SPACE_ROTATE)?;
         let click_modifier_right_hnd = input.get_action_handle(PATH_CLICK_MODIFIER_RIGHT)?;
         let click_modifier_middle_hnd = input.get_action_handle(PATH_CLICK_MODIFIER_MIDDLE)?;
@@ -117,6 +120,7 @@ impl OpenVrInputSource {
             show_hide_hnd,
             toggle_dashboard_hnd,
             space_drag_hnd,
+            space_fling_hnd,
             space_rotate_hnd,
             click_modifier_right_hnd,
             click_modifier_middle_hnd,
@@ -207,6 +211,11 @@ impl OpenVrInputSource {
 
             app_hand.now.space_drag = input
                 .get_digital_action_data(self.space_drag_hnd, hand.input_hnd)
+                .map(|x| x.0.bState)
+                .unwrap_or(false);
+
+            app_hand.now.space_fling = input
+                .get_digital_action_data(self.space_fling_hnd, hand.input_hnd)
                 .map(|x| x.0.bState)
                 .unwrap_or(false);
 

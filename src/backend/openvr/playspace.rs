@@ -23,6 +23,8 @@ pub(super) struct PlayspaceMover {
     drag: Option<MoverData<Vec3A>>,
     rotate: Option<MoverData<Quat>>,
     floor_offset: f32,
+    space_fling_enabled: bool,
+    momentum_velocity: Vec3A,
 }
 
 impl PlayspaceMover {
@@ -32,6 +34,8 @@ impl PlayspaceMover {
             drag: None,
             rotate: None,
             floor_offset: 0.0,
+            space_fling_enabled: false,
+            momentum_velocity: Vec3A::ZERO,
         }
     }
 
@@ -160,6 +164,43 @@ impl PlayspaceMover {
                     return;
                 }
             }
+        }
+
+        state
+            .input_state
+            .pointers
+            .iter()
+            .any(|p| p.now.space_fling && !p.before.space_fling)
+            .then(|| self.space_fling_enabled ^= true);
+
+        const CONSIDER_FLOOR: bool = false;
+
+        let user_is_interacting = state
+            .input_state
+            .pointers
+            .iter()
+            .any(|p| p.now.space_drag || p.now.space_rotate);
+
+        if !user_is_interacting && self.space_fling_enabled {
+            let Some(mat) = get_working_copy(&universe, chaperone_mgr) else {
+                log::warn!("Can't space drag - failed to get zero pose");
+                return;
+            };
+            let mut new_pose = mat;
+            new_pose.translation +=
+                self.momentum_velocity * state.session.config.space_fling_multiplier;
+
+            if CONSIDER_FLOOR && (new_pose.translation.y > 0.0) {
+                new_pose.translation.y = 0.0;
+                self.momentum_velocity = Vec3A::ZERO;
+            }
+
+            if new_pose.translation != mat.translation {
+                set_working_copy(&universe, chaperone_mgr, &new_pose, self.floor_offset);
+                chaperone_mgr.commit_working_copy(EChaperoneConfigFile::EChaperoneConfigFile_Live);
+            }
+        } else {
+            self.momentum_velocity = Vec3A::ZERO;
         }
     }
 

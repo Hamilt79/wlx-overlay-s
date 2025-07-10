@@ -115,6 +115,15 @@
             },
             {
                "inputs" : {
+                  "double" : {
+                     "output" : "/actions/default/in/spacefling"
+                  }
+               },
+               "mode" : "button",
+               "path" : "/user/hand/right/input/b"
+            },
+            {
+               "inputs" : {
                   "grab" : {
                      "output" : "/actions/default/in/grab"
                   }

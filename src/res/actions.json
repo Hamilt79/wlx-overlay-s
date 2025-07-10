@@ -46,6 +46,11 @@
       "requirement": "optional"
     },
     {
+      "name": "/actions/default/in/SpaceFling",
+      "type": "boolean",
+      "requirement": "optional"
+    },
+    {
       "name": "/actions/default/in/SpaceRotate",
       "type": "boolean",
       "requirement": "optional"
