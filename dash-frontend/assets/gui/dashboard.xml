@@ -1,0 +1,158 @@
+<layout>
+  <include src="theme.xml" />
+
+  <theme>
+    <var key="side_size" value="48" />
+    <var key="top_size" value="40" />
+    <var key="side_sprite_size" value="26" />
+    <var key="side_button_size" value="48" />
+  </theme>
+
+  <template name="SideButton">
+    <Button
+      id="${id}"
+      round="100%"
+      width="~side_button_size"
+      height="~side_button_size"
+      color="#44444400"
+      hover_color="#333333ff"
+      border_color="#00000000"
+      hover_border_color="#555555ff"
+      tooltip="${tooltip}"
+      tooltip_side="${tooltip_side}"
+    >
+      <sprite src_builtin="${src_builtin}" width="~side_sprite_size" height="~side_sprite_size" />
+    </Button>
+  </template>
+
+  <elements>
+    <!-- left/right separator (menu and rest) -->
+    <div flex_direction="row" gap="8" width="100%" height="100%" padding="4" interactable="0">
+      <!-- LEFT MENU -->
+      <div id="menu"
+        width="~side_size"
+        min_width="~side_size"
+        max_width="~side_size"
+        height="100%"
+        align_items="center"
+        justify_content="center">
+        <rectangle
+          width="100%"
+          round="100%"
+          color="~color_menu_dark"
+          flex_direction="column"
+          justify_content="center"
+          align_items="center"
+          gap="4"
+        >
+          <SideButton id="btn_side_home" src_builtin="dashboard/wayvr_dashboard_mono.svg" tooltip="HOME_SCREEN" tooltip_side="right" />
+          <SideButton id="btn_side_apps" src_builtin="dashboard/apps.svg" tooltip="APPLICATIONS" tooltip_side="right" />
+          <SideButton id="btn_side_games" src_builtin="dashboard/games.svg" tooltip="GAMES" tooltip_side="right" />
+          <SideButton id="btn_side_monado" src_builtin="dashboard/monado.svg" tooltip="MONADO_RUNTIME" tooltip_side="right" />
+          <rectangle height="2" color="#FFFFFF33" width="~side_sprite_size" />
+          <SideButton id="btn_side_settings" src_builtin="dashboard/settings.svg" tooltip="SETTINGS" tooltip_side="right" />
+        </rectangle>
+      </div>
+      <!-- REST -->
+      <!-- top/content/bottom panel separator -->
+      <div
+        flex_direction="column"
+        gap="8"
+        width="100%"
+        height="100%"
+        overflow_x="scroll">
+        <!-- TOP PANEL -->
+        <div position="relative" width="100%" height="~top_size" min_height="~top_size" max_height="~top_size" justify_content="end">
+          <!-- Title bar -->
+          <div width="100%" align_items="center" justify_content="center">
+            <rectangle min_width="300" height="100%" consume_mouse_events="1" round="100%" color="~color_top_panel" align_items="center" justify_content="center" gap="8">
+              <sprite id="sprite_titlebar_icon" width="24" height="24" />
+              <label id="label_titlebar_title" weight="bold" size="16" text="Title" />
+            </rectangle>
+          </div>
+          <!-- Close button -->
+          <Button position="absolute" id="btn_close" color="~color_top_panel" round="100%" width="~top_size" height="~top_size" tooltip="CLOSE_WINDOW" tooltip_side="left">
+            <sprite src_builtin="dashboard/close.svg" width="32" height="32" />
+          </Button>
+        </div>
+
+        <!-- CONTENT -->
+        <!-- color and color2 alpha will be modified at runtime -->
+        <rectangle
+          id="rect_content"
+          color2="#0d131a00"
+          color="#252f5300"
+          gradient="vertical"
+          round="8"
+          flex_grow="1"
+          width="100%"
+          overflow_y="scroll"
+        >
+          <!-- radial gradient -->
+          <rectangle
+            position="absolute" width="100%" height="100%"
+            gradient="radial" color="#44BBFF11" color2="#00000000" />
+
+          <div
+            id="content"
+            flex_direction="column"
+            overflow_x="scroll"
+            overflow_y="scroll"
+            padding="16"
+            gap="8"
+            width="100%"
+            min_height="100%"
+          >
+            <!-- filled-in at runtime -->
+          </div>
+
+          <div position="absolute" id="popup_manager" width="100%" height="100%" />
+        </rectangle>
+        <!-- BOTTOM PANEL -->
+        <rectangle
+          consume_mouse_events="1"
+          width="100%"
+          height="48"
+          min_height="48"
+          max_height="48"
+          box_sizing="border_box"
+          round="8"
+          flex_direction="row"
+          align_items="center"
+          justify_content="space_between"
+          color="~color_bottom_panel"
+        >
+          <!-- left gradient -->
+          <div position="absolute" width="100%" height="100%" justify_content="start">
+            <rectangle position="absolute" width="40%" height="100%" color="#0a0a0a" color2="#0a0a0a00" round="8" gradient="horizontal" />
+          </div>
+
+          <!-- right gradient -->
+          <div position="absolute" width="100%" height="100%" justify_content="end">
+            <rectangle position="absolute" width="40%" height="100%" color2="#0a0a0a" color="#0a0a0a00" round="8" gradient="horizontal" />
+          </div>
+
+          <!-- top shine -->
+          <div position="absolute" width="100%" height="100%" justify_content="center">
+            <rectangle position="absolute" width="99%" height="2" color="#FFFFFF22" round="4" />
+          </div>
+
+          <!-- Left bottom side -->
+          <div margin_left="8">
+            <Button id="btn_audio" color="#FFFFFF00" border_color="#FFFFFF00" tooltip="AUDIO.VOLUME" tooltip_side="top">
+              <sprite src_builtin="dashboard/volume.svg" width="24" height="24" margin="8" />
+            </Button>
+            <Button id="btn_recenter" color="#FFFFFF00" border_color="#FFFFFF00" tooltip="ACTIONS.RECENTER_PLAYSPACE" tooltip_side="top">
+              <sprite src_builtin="dashboard/recenter.svg" width="24" height="24" margin="8" />
+            </Button>
+          </div>
+
+          <!-- Right bottom side -->
+          <div margin_right="16">
+            <label id="label_time" size="16" weight="light" />
+          </div>
+        </rectangle>
+      </div>
+    </div>
+  </elements>
+</layout>

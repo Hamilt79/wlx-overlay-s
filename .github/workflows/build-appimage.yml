@@ -5,9 +5,10 @@ on:
     branches:
       - 'main'
       - 'staging'
+      - 'test-*'
 
 env:
-  APPDIR: WlxOverlay-S.AppDir
+  APPDIR: WayVR.AppDir
   CARGO_TERM_COLOR: always
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
@@ -15,21 +16,24 @@ env:
 jobs:
   build_appimage:
     runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: ./wayvr
     steps:
       - uses: actions/checkout@v3
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
       - name: Prepare Environment
         run: |
-          .github/workflows/scripts/appimage_prepare_env.sh
+          ../.github/workflows/scripts/appimage_prepare_env.sh
       - name: Cargo Build
         run: |
-          .github/workflows/scripts/appimage_build_wlx.sh
+          ../.github/workflows/scripts/appimage_build_wlx.sh
       - name: Package AppImage
         run: |
-          .github/workflows/scripts/appimage_package.sh
+          ../.github/workflows/scripts/appimage_package.sh
       - name: Upload AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: WlxOverlay-S-${{ github.ref_name }}-x86_64.AppImage
-          path: ./WlxOverlay-S-x86_64.AppImage
+          name: WayVR-${{ github.ref_name }}-x86_64.AppImage
+          path: ./wayvr/WayVR-x86_64.AppImage

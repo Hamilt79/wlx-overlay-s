@@ -1,0 +1,19 @@
+[package]
+name = "wayvrctl"
+version = "26.1.2"
+edition = "2024"
+description = "CLI for controlling WayVR"
+license = "GPL-3.0-only"
+authors = ["galister", "oo8dev"]
+repository = "https://github.com/wlx-team/wayvr"
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+env_logger = "0.11.8"
+tokio = "1.48.0"
+wayvr-ipc = { path = "../wayvr-ipc" }
+shell-words = "1.1.1"
