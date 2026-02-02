@@ -11,7 +11,6 @@ use super::overlay::OpenXrOverlayData;
 
 struct MoverData<T> {
     pose: Affine3A,
-    base_pose: Affine3A,
     hand: usize,
     hand_pose: T,
     velocity: Vec3A,
@@ -87,60 +86,60 @@ impl PlayspaceMover {
             }
         }
 
-        if let Some(mut data) = self.rotate.take() {
-            let pointer = &app.input_state.pointers[data.hand];
-            if !pointer.now.space_rotate {
-                self.last_transform = data.pose;
-                log::info!("End space rotate");
-                return;
-            }
+       if let Some(mut data) = self.rotate.take() {
+    let pointer = &app.input_state.pointers[data.hand];
+    if !pointer.now.space_rotate {
+        self.last_transform = data.pose;
+        log::info!("End space rotate");
+        return;
+    }
 
-            let new_hand = Quat::from_affine3(
-                &(data.base_pose * app.input_state.pointers[data.hand].raw_pose),
-            );
+    let new_hand = Quat::from_affine3(&pointer.raw_pose).normalize();
 
-            // let dq = new_hand * data.hand_pose.conjugate();
-            let mut dq = new_hand * data.hand_pose.conjugate();
-            if dq.w < 0.0 {
-                dq = -dq;
-            }
-            // let mut space_transform = Affine3A::from_quat(dq);
-            // let offset = (space_transform.transform_vector3a(app.input_state.hmd.translation)
-            //     - app.input_state.hmd.translation)
-            //     * -1.0;
-            let mut space_transform = Affine3A::from_quat(dq);
+    let mut dq = (new_hand * data.hand_pose.conjugate()).normalize();
+    if dq.w < 0.0 {
+        dq = -dq;
+    }
 
-            let hmd_pos = app.input_state.hmd.translation;
-            let rotated_hmd = space_transform.transform_point3a(hmd_pos);
+    let mut space_transform = if app.session.config.space_rotate_unlocked {
+        Affine3A::from_quat(dq)
+    } else {
+        let rel_y = f32::atan2(
+            2.0 * dq.y.mul_add(dq.w, dq.x * dq.z),
+            2.0f32.mul_add(dq.w.mul_add(dq.w, dq.x * dq.x), -1.0),
+        );
+        Affine3A::from_rotation_y(rel_y)
+    };
 
-            space_transform.translation = hmd_pos - rotated_hmd;
+    let pivot = app.input_state.hmd.translation; // tracking/local
+    let rotated_pivot = space_transform.transform_point3a(pivot);
+    space_transform.translation = pivot - rotated_pivot;
 
-            // space_transform.translation = offset;
+    data.pose *= space_transform;
 
-            // data.pose *= space_transform;
-            data.pose *= data.base_pose * space_transform;
-            
-            // data.hand_pose = new_hand;
+    data.hand_pose = new_hand;
 
-            apply_offset(data.pose, monado);
-            self.rotate = Some(data);
-        } else {
-            for (i, pointer) in app.input_state.pointers.iter().enumerate() {
-                if pointer.now.space_rotate {
-                    let hand_pose = Quat::from_affine3(&(self.last_transform * pointer.raw_pose));
-                    self.rotate = Some(MoverData {
-                        pose: self.last_transform,
-                        base_pose: self.last_transform,
-                        hand: i,
-                        hand_pose,
-                        velocity: Vec3A::ZERO,
-                    });
-                    self.drag = None;
-                    log::info!("Start space rotate");
-                    return;
-                }
-            }
+    apply_offset(data.pose, monado);
+    self.rotate = Some(data);
+} else {
+    for (i, pointer) in app.input_state.pointers.iter().enumerate() {
+        if pointer.now.space_rotate {
+            let hand_pose = Quat::from_affine3(&pointer.raw_pose).normalize();
+
+            self.rotate = Some(MoverData {
+                pose: self.last_transform,
+                hand: i,
+                hand_pose,
+                velocity: Vec3A::ZERO,
+            });
+
+            self.drag = None;
+            log::info!("Start space rotate");
+            return;
         }
+    }
+}
+
 
         if let Some(mut data) = self.drag.take() {
             let pointer = &app.input_state.pointers[data.hand];
@@ -191,7 +190,7 @@ impl PlayspaceMover {
                         .transform_point3a(pointer.raw_pose.translation);
                     self.drag = Some(MoverData {
                         pose: self.last_transform,
-                        base_pose: self.last_transform,
+                        // base_pose: self.last_transform,
                         hand: i,
                         hand_pose: hand_pos,
                         velocity: Vec3A::ZERO,
