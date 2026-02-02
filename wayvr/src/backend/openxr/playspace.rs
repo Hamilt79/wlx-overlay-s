@@ -86,60 +86,59 @@ impl PlayspaceMover {
             }
         }
 
-       if let Some(mut data) = self.rotate.take() {
-    let pointer = &app.input_state.pointers[data.hand];
-    if !pointer.now.space_rotate {
-        self.last_transform = data.pose;
-        log::info!("End space rotate");
-        return;
-    }
+        if let Some(mut data) = self.rotate.take() {
+            let pointer = &app.input_state.pointers[data.hand];
+            if !pointer.now.space_rotate {
+                self.last_transform = data.pose;
+                log::info!("End space rotate");
+                return;
+            }
 
-    let new_hand = Quat::from_affine3(&pointer.raw_pose).normalize();
+            let new_hand = Quat::from_affine3(&pointer.raw_pose).normalize();
 
-    let mut dq = (new_hand * data.hand_pose.conjugate()).normalize();
-    if dq.w < 0.0 {
-        dq = -dq;
-    }
+            let mut dq = (new_hand * data.hand_pose.conjugate()).normalize();
+            if dq.w < 0.0 {
+                dq = -dq;
+            }
 
-    let mut space_transform = if app.session.config.space_rotate_unlocked {
-        Affine3A::from_quat(dq)
-    } else {
-        let rel_y = f32::atan2(
-            2.0 * dq.y.mul_add(dq.w, dq.x * dq.z),
-            2.0f32.mul_add(dq.w.mul_add(dq.w, dq.x * dq.x), -1.0),
-        );
-        Affine3A::from_rotation_y(rel_y)
-    };
+            let mut space_transform = if app.session.config.space_rotate_unlocked {
+                Affine3A::from_quat(dq)
+            } else {
+                let rel_y = f32::atan2(
+                    2.0 * dq.y.mul_add(dq.w, dq.x * dq.z),
+                    2.0f32.mul_add(dq.w.mul_add(dq.w, dq.x * dq.x), -1.0),
+                );
+                Affine3A::from_rotation_y(rel_y)
+            };
 
-    let pivot = app.input_state.hmd.translation; // tracking/local
-    let rotated_pivot = space_transform.transform_point3a(pivot);
-    space_transform.translation = pivot - rotated_pivot;
+            let pivot = app.input_state.hmd.translation; // tracking/local
+            let rotated_pivot = space_transform.transform_point3a(pivot);
+            space_transform.translation = pivot - rotated_pivot;
 
-    data.pose *= space_transform;
+            data.pose *= space_transform;
 
-    data.hand_pose = new_hand;
+            data.hand_pose = new_hand;
 
-    apply_offset(data.pose, monado);
-    self.rotate = Some(data);
-} else {
-    for (i, pointer) in app.input_state.pointers.iter().enumerate() {
-        if pointer.now.space_rotate {
-            let hand_pose = Quat::from_affine3(&pointer.raw_pose).normalize();
+            apply_offset(data.pose, monado);
+            self.rotate = Some(data);
+        } else {
+            for (i, pointer) in app.input_state.pointers.iter().enumerate() {
+                if pointer.now.space_rotate {
+                    let hand_pose = Quat::from_affine3(&pointer.raw_pose).normalize();
 
-            self.rotate = Some(MoverData {
-                pose: self.last_transform,
-                hand: i,
-                hand_pose,
-                velocity: Vec3A::ZERO,
-            });
+                    self.rotate = Some(MoverData {
+                        pose: self.last_transform,
+                        hand: i,
+                        hand_pose,
+                        velocity: Vec3A::ZERO,
+                    });
 
-            self.drag = None;
-            log::info!("Start space rotate");
-            return;
+                    self.drag = None;
+                    log::info!("Start space rotate");
+                    return;
+                }
+            }
         }
-    }
-}
-
 
         if let Some(mut data) = self.drag.take() {
             let pointer = &app.input_state.pointers[data.hand];
