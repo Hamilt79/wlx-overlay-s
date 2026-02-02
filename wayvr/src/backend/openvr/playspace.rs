@@ -54,8 +54,6 @@ impl PlayspaceMover {
             PlayspaceTask::Recenter => {
                 self.recenter(chaperone_mgr, &app.input_state);
             }
-            space_fling_enabled: false,
-            momentum_velocity: Vec3A::ZERO,
         }
     }
 
@@ -159,7 +157,6 @@ impl PlayspaceMover {
 
             data.pose.translation += relative_pos;
             data.hand_pose = new_hand;
-
             if self.universe == ETrackingUniverseOrigin::TrackingUniverseStanding {
                 apply_chaperone_offset(overlay_offset, chaperone_mgr);
             }
@@ -184,8 +181,8 @@ impl PlayspaceMover {
                 }
             }
         }
-
-        state
+        
+        app
             .input_state
             .pointers
             .iter()
@@ -194,7 +191,7 @@ impl PlayspaceMover {
 
         const CONSIDER_FLOOR: bool = false;
 
-        let user_is_interacting = state
+        let user_is_interacting = app
             .input_state
             .pointers
             .iter()
@@ -207,7 +204,7 @@ impl PlayspaceMover {
             };
             let mut new_pose = mat;
             new_pose.translation +=
-                self.momentum_velocity * state.session.config.space_fling_multiplier;
+                self.momentum_velocity * app.session.config.space_fling_multiplier;
 
             if CONSIDER_FLOOR && (new_pose.translation.y > 0.0) {
                 new_pose.translation.y = 0.0;
@@ -215,7 +212,7 @@ impl PlayspaceMover {
             }
 
             if new_pose.translation != mat.translation {
-                set_working_copy(&universe, chaperone_mgr, &new_pose, self.floor_offset);
+                set_working_copy(&universe, chaperone_mgr, &new_pose);
                 chaperone_mgr.commit_working_copy(EChaperoneConfigFile::EChaperoneConfigFile_Live);
             }
         } else {

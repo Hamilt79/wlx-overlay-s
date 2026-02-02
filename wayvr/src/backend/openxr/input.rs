@@ -690,8 +690,8 @@ fn suggest_bindings(instance: &xr::Instance, hands: &[&OpenXrHandSource; 3]) {
 
         add_custom!(
             profile.space_fling,
-            &hands[0].space_fling,
-            &hands[1].space_fling,
+            space_fling,
+            hands,
             bindings,
             instance
         );

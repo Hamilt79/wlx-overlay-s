@@ -254,6 +254,9 @@ pub struct GeneralConfig {
 	#[serde(default = "def_one")]
 	pub space_drag_multiplier: f32,
 
+	#[serde(default = "def_one")]
+	pub space_fling_multiplier: f32,
+
 	#[serde(default = "def_empty")]
 	pub skybox_texture: Arc<str>,
 

@@ -11,6 +11,7 @@ use super::overlay::OpenXrOverlayData;
 
 struct MoverData<T> {
     pose: Affine3A,
+    base_pose: Affine3A,
     hand: usize,
     hand_pose: T,
     velocity: Vec3A,
@@ -95,19 +96,10 @@ impl PlayspaceMover {
             }
 
             let new_hand =
-                Quat::from_affine3(&(data.pose * app.input_state.pointers[data.hand].raw_pose));
+                Quat::from_affine3(&(data.base_pose * app.input_state.pointers[data.hand].raw_pose));
 
             let dq = new_hand * data.hand_pose.conjugate();
-            let mut space_transform = if app.session.config.space_rotate_unlocked {
-                Affine3A::from_quat(dq)
-            } else {
-                let rel_y = f32::atan2(
-                    2.0 * dq.y.mul_add(dq.w, dq.x * dq.z),
-                    2.0f32.mul_add(dq.w.mul_add(dq.w, dq.x * dq.x), -1.0),
-                );
-
-                Affine3A::from_rotation_y(rel_y)
-            };
+            let mut space_transform = Affine3A::from_quat(dq);
             let offset = (space_transform.transform_vector3a(app.input_state.hmd.translation)
                 - app.input_state.hmd.translation)
                 * -1.0;
@@ -125,6 +117,7 @@ impl PlayspaceMover {
                     let hand_pose = Quat::from_affine3(&(self.last_transform * pointer.raw_pose));
                     self.rotate = Some(MoverData {
                         pose: self.last_transform,
+                        base_pose: self.last_transform,
                         hand: i,
                         hand_pose,
                         velocity: Vec3A::ZERO,
@@ -185,6 +178,7 @@ impl PlayspaceMover {
                         .transform_point3a(pointer.raw_pose.translation);
                     self.drag = Some(MoverData {
                         pose: self.last_transform,
+                        base_pose: self.last_transform,
                         hand: i,
                         hand_pose: hand_pos,
                         velocity: Vec3A::ZERO,
@@ -195,8 +189,7 @@ impl PlayspaceMover {
             }
         }
 
-        state
-            .input_state
+        app.input_state
             .pointers
             .iter()
             .any(|p| p.now.space_fling && !p.before.space_fling)
@@ -205,16 +198,16 @@ impl PlayspaceMover {
         // const FLING_STRENGTH: f32 = 2.0;
         const CONSIDER_FLOOR: bool = false;
 
-        let user_is_interacting = state
+        let user_is_interacting = app
             .input_state
             .pointers
             .iter()
             .any(|p| p.now.space_drag || p.now.space_rotate);
 
         if !user_is_interacting && self.space_fling_enabled {
-
             let mut new_pose = self.last_transform;
-            new_pose.translation += self.momentum_velocity * state.session.config.space_fling_multiplier;
+            new_pose.translation +=
+                self.momentum_velocity * app.session.config.space_fling_multiplier;
 
             if CONSIDER_FLOOR && (new_pose.translation.y > 0.0) {
                 new_pose.translation.y = 0.0;
@@ -223,7 +216,7 @@ impl PlayspaceMover {
 
             if new_pose.translation != self.last_transform.translation {
                 self.last_transform = new_pose;
-                self.apply_offset(new_pose, monado);
+                apply_offset(new_pose, monado);
             }
         } else {
             self.momentum_velocity = Vec3A::ZERO;
