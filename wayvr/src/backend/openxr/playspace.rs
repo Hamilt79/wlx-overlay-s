@@ -95,19 +95,32 @@ impl PlayspaceMover {
                 return;
             }
 
-            let new_hand =
-                Quat::from_affine3(&(data.base_pose * app.input_state.pointers[data.hand].raw_pose));
+            let new_hand = Quat::from_affine3(
+                &(data.base_pose * app.input_state.pointers[data.hand].raw_pose),
+            );
 
-            let dq = new_hand * data.hand_pose.conjugate();
+            // let dq = new_hand * data.hand_pose.conjugate();
+            let mut dq = new_hand * data.hand_pose.conjugate();
+            if dq.w < 0.0 {
+                dq = -dq;
+            }
+            // let mut space_transform = Affine3A::from_quat(dq);
+            // let offset = (space_transform.transform_vector3a(app.input_state.hmd.translation)
+            //     - app.input_state.hmd.translation)
+            //     * -1.0;
             let mut space_transform = Affine3A::from_quat(dq);
-            let offset = (space_transform.transform_vector3a(app.input_state.hmd.translation)
-                - app.input_state.hmd.translation)
-                * -1.0;
 
-            space_transform.translation = offset;
+            let hmd_pos = app.input_state.hmd.translation;
+            let rotated_hmd = space_transform.transform_point3a(hmd_pos);
 
-            data.pose *= space_transform;
-            data.hand_pose = new_hand;
+            space_transform.translation = hmd_pos - rotated_hmd;
+
+            // space_transform.translation = offset;
+
+            // data.pose *= space_transform;
+            data.pose *= data.base_pose * space_transform;
+            
+            // data.hand_pose = new_hand;
 
             apply_offset(data.pose, monado);
             self.rotate = Some(data);
