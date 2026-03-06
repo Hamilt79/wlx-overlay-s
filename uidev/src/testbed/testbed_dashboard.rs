@@ -1,7 +1,9 @@
+use std::rc::Rc;
+
 use crate::testbed::{Testbed, TestbedUpdateParams};
 use dash_frontend::frontend::{self, FrontendUpdateParams};
-use wgui::layout::Layout;
-use wlx_common::dash_interface_emulated::DashInterfaceEmulated;
+use wgui::{layout::Layout, theme::WguiTheme};
+use wlx_common::{dash_interface_emulated::DashInterfaceEmulated, locale::WayVRLangProvider};
 
 pub struct TestbedDashboard {
 	frontend: frontend::Frontend<()>,
@@ -10,14 +12,14 @@ pub struct TestbedDashboard {
 impl TestbedDashboard {
 	pub fn new() -> anyhow::Result<Self> {
 		let interface = DashInterfaceEmulated::new();
+		let lang_provider = WayVRLangProvider::default();
 
-		let frontend = frontend::Frontend::new(
-			frontend::InitParams {
-				interface: Box::new(interface),
-				has_monado: true,
-			},
-			&mut (),
-		)?;
+		let frontend = frontend::Frontend::new(frontend::InitParams {
+			interface: Box::new(interface),
+			has_monado: true,
+			lang_provider: &lang_provider,
+			theme: Rc::new(WguiTheme::default()),
+		})?;
 		Ok(Self { frontend })
 	}
 }

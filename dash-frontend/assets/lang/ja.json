@@ -10,7 +10,6 @@
   "APP_SETTINGS": {
     "HIDE_USERNAME": "ユーザー名を非表示",
     "OPAQUE_BACKGROUND": "不透明な背景",
-    "WLX": {},
     "LOOK_AND_FEEL": "外観",
     "HIDE_GRAB_HELP": "グリップ動作中にのヘルプを非表示",
     "ANIMATION_SPEED": "UIアニメーション速度",
@@ -87,7 +86,13 @@
     "HANDSFREE_POINTER_HELP": "モーションコントローラーが利用できない場合の入力方法。\n左手のピンチは掴み、右手のピンチはクリックです。",
     "UI_GRADIENT_INTENSITY": "UIグラデーションの強さ",
     "RESET_PLAYSPACE": "プレイエリアをリセット",
-    "RESET_PLAYSPACE_HELP": "プレイエリアのオフセットをクリアします。"
+    "RESET_PLAYSPACE_HELP": "プレイエリアのオフセットをクリアします。",
+    "BLOCK_POSES_ON_KBD_INTERACTION": "キーボード操作時のポーズをブロック",
+    "BLOCK_POSES_ON_KBD_INTERACTION_HELP": "キーボードがホバーされ、「ゲーム入力をブロック」が有効になっている場合、ゲームがポーズを受信することをブロックします",
+    "LANGUAGE": "言語",
+    "REQUIRES_RESTART": "再起動が必要です",
+    "GRID_OPACITY": "フロアグリッドの不透明度",
+    "GRID_OPACITY_HELP": "スカイボックスが有効なときの床グリッドの不透明度"
   },
   "HELLO": "こんにちは！",
   "AUDIO": {

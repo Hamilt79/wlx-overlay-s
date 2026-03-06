@@ -10,6 +10,7 @@ use wlx_common::{
         SerializedWindowStates,
     },
     config_io,
+    locale::Language,
     overlays::BackendAttribValue,
 };
 
@@ -126,8 +127,10 @@ pub struct AutoSettings {
     pub left_handed_mouse: bool,
     pub block_game_input: bool,
     pub block_game_input_ignore_watch: bool,
+    pub block_poses_on_kbd_interaction: bool,
     pub space_drag_multiplier: f32,
     pub use_skybox: bool,
+    pub grid_opacity: f32,
     pub use_passthrough: bool,
     pub screen_render_down: bool,
     pub pointer_lerp_factor: f32,
@@ -142,6 +145,7 @@ pub struct AutoSettings {
     pub keyboard_middle_click_mode: AltModifier,
     pub autostart_apps: Vec<WvrProcessLaunchParams>,
     pub handsfree_pointer: HandsfreePointer,
+    pub language: Option<Language>,
 }
 
 fn get_settings_path() -> PathBuf {
@@ -174,8 +178,10 @@ pub fn save_settings(config: &GeneralConfig) -> anyhow::Result<()> {
         left_handed_mouse: config.left_handed_mouse,
         block_game_input: config.block_game_input,
         block_game_input_ignore_watch: config.block_game_input_ignore_watch,
+        block_poses_on_kbd_interaction: config.block_poses_on_kbd_interaction,
         space_drag_multiplier: config.space_drag_multiplier,
         use_skybox: config.use_skybox,
+        grid_opacity: config.grid_opacity,
         use_passthrough: config.use_passthrough,
         screen_render_down: config.screen_render_down,
         pointer_lerp_factor: config.pointer_lerp_factor,
@@ -190,6 +196,7 @@ pub fn save_settings(config: &GeneralConfig) -> anyhow::Result<()> {
         keyboard_middle_click_mode: config.keyboard_middle_click_mode,
         autostart_apps: config.autostart_apps.clone(),
         handsfree_pointer: config.handsfree_pointer,
+        language: config.language,
     };
 
     let json = serde_json::to_string_pretty(&conf).unwrap(); // want panic

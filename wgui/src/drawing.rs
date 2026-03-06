@@ -19,10 +19,6 @@ use crate::{
 
 use super::{layout::Layout, widget::DrawState};
 
-pub struct ImageHandle {
-	// to be implemented, will contain pixel data (RGB or RGBA) loaded via "ImageBank" or something by the gui
-}
-
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct Boundary {
 	pub pos: Vec2,
@@ -254,14 +250,19 @@ pub fn has_overflow_clip(style: &taffy::Style) -> bool {
 	style.overflow.x != taffy::Overflow::Visible || style.overflow.y != taffy::Overflow::Visible
 }
 
-fn primitive_debug_rect(boundary: &Boundary, transform: &Mat4, color: drawing::Color) -> drawing::RenderPrimitive {
+fn primitive_debug_rect(
+	boundary: &Boundary,
+	transform: &Mat4,
+	color: drawing::Color,
+	border: f32,
+) -> drawing::RenderPrimitive {
 	drawing::RenderPrimitive::Rectangle(
 		PrimitiveExtent {
 			boundary: *boundary,
 			transform: *transform,
 		},
 		Rectangle {
-			border: 1.0,
+			border,
 			border_color: color,
 			color: Color::new(0.0, 0.0, 0.0, 0.0),
 			..Default::default()
@@ -277,12 +278,16 @@ pub fn push_transform_stack(
 ) {
 	let raw_dim = Vec2::new(l.size.width, l.size.height);
 	let visual_dim = raw_dim + scroll_shift;
+	let content_dim = Vec2::new(l.content_box_width(), l.content_box_height());
+	let content_rel_pos = Vec2::new(l.content_box_x(), l.content_box_y());
 
 	transform_stack.push(stack::Transform {
 		rel_pos: Vec2::new(l.location.x, l.location.y) - scroll_shift,
 		transform: widget_state.data.transform,
 		raw_dim,
 		visual_dim,
+		content_dim,
+		content_rel_pos,
 		abs_pos: Default::default(),
 		transform_rel: Default::default(),
 	});
@@ -301,29 +306,33 @@ impl PushScissorStackResult {
 	}
 }
 
-/// Returns true if scissor has been pushed.
+/// Returns Some() if scissor has been pushed.
 pub fn push_scissor_stack(
 	transform_stack: &mut TransformStack,
 	scissor_stack: &mut ScissorStack,
 	scroll_shift: Vec2,
 	info: &Option<ScrollbarInfo>,
 	style: &taffy::Style,
-) -> PushScissorStackResult {
+) -> Option<PushScissorStackResult> {
 	let mut boundary_absolute = drawing::Boundary::construct_absolute(transform_stack);
 	boundary_absolute.pos += scroll_shift;
 
 	let do_clip = info.is_some() && has_overflow_clip(style);
 
+	if !do_clip {
+		return None; // Don't care
+	}
+
 	scissor_stack.push(ScissorBoundary(boundary_absolute));
 
 	if scissor_stack.is_out_of_bounds() {
-		return PushScissorStackResult::OutOfBounds;
+		return Some(PushScissorStackResult::OutOfBounds);
 	}
 
 	if do_clip {
-		PushScissorStackResult::VisibleAndClip
+		Some(PushScissorStackResult::VisibleAndClip)
 	} else {
-		PushScissorStackResult::VisibleDontClip
+		Some(PushScissorStackResult::VisibleDontClip)
 	}
 }
 
@@ -368,14 +377,16 @@ fn draw_widget(
 			&boundary,
 			&state.transform_stack.get().transform,
 			Color::new(0.0, 1.0, 1.0, 0.5),
+			1.0,
 		));
 	}
 
 	let starting_scissor_set_count = internal.scissor_set_count;
-
 	let scissor_result = push_scissor_stack(state.transform_stack, state.scissor_stack, scroll_shift, &info, style);
 
-	if scissor_result == PushScissorStackResult::VisibleAndClip {
+	if let Some(scissor_result) = &scissor_result
+		&& *scissor_result == PushScissorStackResult::VisibleAndClip
+	{
 		if params.debug_draw {
 			let mut boundary_relative = drawing::Boundary::construct_relative(state.transform_stack);
 			boundary_relative.pos += scroll_shift;
@@ -383,6 +394,7 @@ fn draw_widget(
 				&boundary_relative,
 				&state.transform_stack.get().transform,
 				Color::new(1.0, 0.0, 1.0, 1.0),
+				3.0,
 			));
 		}
 		state
@@ -397,12 +409,17 @@ fn draw_widget(
 		style,
 	};
 
-	if scissor_result.should_display() {
+	if scissor_result
+		.as_ref()
+		.is_none_or(PushScissorStackResult::should_display)
+	{
 		widget_state.draw_all(state, &draw_params);
 		draw_children(params, state, node_id, internal, false);
 	}
 
-	state.scissor_stack.pop();
+	if scissor_result.is_some() {
+		state.scissor_stack.pop();
+	}
 
 	let current_scissor_set_count = internal.scissor_set_count;
 
@@ -412,11 +429,11 @@ fn draw_widget(
 			.push(drawing::RenderPrimitive::ScissorSet(*state.scissor_stack.get()));
 	}
 
-	state.transform_stack.pop();
-
 	if let Some(info) = &info {
 		widget_state.draw_scrollbars(state, &draw_params, info);
 	}
+
+	state.transform_stack.pop();
 
 	if wants_redraw {
 		state.alterables.mark_redraw();

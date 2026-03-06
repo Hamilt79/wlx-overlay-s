@@ -44,7 +44,6 @@
       flex_direction="row"
       flex_wrap="wrap"
       gap="4"
-      overflow_y="scroll"
     />
   </elements>
 </layout>

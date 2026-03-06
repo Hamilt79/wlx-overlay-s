@@ -36,6 +36,8 @@
 		"BLOCK_GAME_INPUT_HELP": "Blocks all input when an overlay is hovered",
 		"BLOCK_GAME_INPUT_IGNORE_WATCH": "Ignore watch when blocking input",
 		"BLOCK_GAME_INPUT_IGNORE_WATCH_HELP": "Do not block input when watch is hovered",
+		"BLOCK_POSES_ON_KBD_INTERACTION": "Block poses when interacting with keyboard",
+		"BLOCK_POSES_ON_KBD_INTERACTION_HELP": "Blocks the game from receiving poses when the keyboard is hovered and 'Block game input' is enabled",
 		"CAPTURE_METHOD": "Wayland screen capture",
 		"CAPTURE_METHOD_HELP": "Try changing this if you are\nexperiencing black or glitchy screens",
 		"CLEAR_PIPEWIRE_TOKENS": "Clear PipeWire tokens",
@@ -61,6 +63,7 @@
 		"KEYBOARD_MIDDLE_CLICK": "Keyboard middle click",
 		"KEYBOARD_MIDDLE_CLICK_HELP": "Modifier to use when typing\nwith purple laser",
 		"KEYBOARD_SOUND_ENABLED": "Keyboard sounds",
+		"LANGUAGE": "Language",
 		"LEFT_HANDED_MOUSE": "Left-handed mouse",
 		"LEFT_HANDED_MOUSE_HELP": "Use this if mouse buttons are swapped",
 		"LONG_PRESS_DURATION": "Long press duration",
@@ -72,10 +75,10 @@
 		"OPTION": {
 			"AUTO": "Automatic",
 			"AUTO_HELP": "ScreenCopy GPU if supported,\notherwise PipeWire GPU.",
-			"EYE_PINCH": "Eye + pinch",
-			"HMD_PINCH": "HMD + pinch",
 			"EYE_ONLY": "Eye only",
+			"EYE_PINCH": "Eye + pinch",
 			"HMD_ONLY": "HMD only",
+			"HMD_PINCH": "HMD + pinch",
 			"NONE": "None",
 			"PIPEWIRE_HELP": "Fast GPU capture,\nstandard on all desktops.",
 			"PW_FALLBACK_HELP": "Slow method with high CPU usage.\nTry in case PipeWire GPU doesn't work",
@@ -83,6 +86,7 @@
 			"SCREENCOPY_HELP": "Slow, no screen share popups.\nWorks on: Hyprland, Niri, River, Sway"
 		},
 		"POINTER_LERP_FACTOR": "Pointer smoothing",
+		"REQUIRES_RESTART": "Requires restart",
 		"RESET_PLAYSPACE": "Reset playspace",
 		"RESET_PLAYSPACE_HELP": "Clear the stage space offset.",
 		"RESTART_SOFTWARE": "Restart software",
@@ -103,6 +107,8 @@
 		"USE_PASSTHROUGH_HELP": "Allow passthrough if the XR runtime supports it",
 		"USE_SKYBOX": "Enable skybox",
 		"USE_SKYBOX_HELP": "Show a skybox if there's no scene app or passthrough",
+		"GRID_OPACITY": "Floor grid opacity",
+		"GRID_OPACITY_HELP": "Opacity of the floor grid when the skybox is enabled",
 		"XR_CLICK_SENSITIVITY": "XR click sensitivity",
 		"XR_CLICK_SENSITIVITY_HELP": "Analog trigger sensitivity",
 		"XR_CLICK_SENSITIVITY_RELEASE": "XR release sensitivity",
@@ -146,8 +152,8 @@
 		"RESOLUTION": "Resolution"
 	},
 	"PROCESS": {
-		"STOP": "Stop",
-		"FORCE_KILL": "Force-kill"
+		"FORCE_KILL": "Force-kill",
+		"STOP": "Stop"
 	},
 	"PROCESS_LIST": "Process list",
 	"REFRESH": "Refresh",

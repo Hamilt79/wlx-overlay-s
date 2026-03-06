@@ -6,7 +6,10 @@ use xr::EyeVisibility;
 
 use super::{CompositionLayer, XrState, helpers, swapchain::WlxSwapchain};
 use crate::{
-    backend::openxr::swapchain::{SwapchainOpts, WlxSwapchainImage, create_swapchain},
+    backend::openxr::{
+        helpers::next_chain_insert,
+        swapchain::{SwapchainOpts, WlxSwapchainImage, create_swapchain},
+    },
     state::AppState,
     windowing::window::OverlayWindowData,
 };
@@ -17,19 +20,7 @@ pub struct OpenXrOverlayData {
     pub(super) swapchain: Option<WlxSwapchain>,
     pub(super) init: bool,
     pub(super) cur_visible: bool,
-    pub(super) last_alpha: f32,
     color_bias_khr: Option<Box<xr::sys::CompositionLayerColorScaleBiasKHR>>,
-}
-
-macro_rules! next_chain_insert {
-    ($layer:expr, $payload:expr) => {{
-        let payload_ptr = $payload.as_mut() as *mut _ as *mut xr::sys::BaseInStructure;
-        let new_elem = payload_ptr.as_mut().unwrap();
-        let mut raw = $layer.into_raw();
-        new_elem.next = raw.next as _;
-        raw.next = payload_ptr as *const _;
-        raw
-    }};
 }
 
 impl OverlayWindowData<OpenXrOverlayData> {
@@ -98,13 +89,13 @@ impl OverlayWindowData<OpenXrOverlayData> {
 
         let transform = state.transform * self.config.backend.frame_meta().unwrap().transform; // contract
 
-        let aspect_ratio = swapchain.extent[1] as f32 / swapchain.extent[0] as f32;
+        let aspect_ratio = swapchain.extent[0] as f32 / swapchain.extent[1] as f32;
         let (scale_x, scale_y) = if aspect_ratio < 1.0 {
             let major = transform.matrix3.col(0).length();
-            (major, major * aspect_ratio)
+            (major * aspect_ratio, major)
         } else {
             let major = transform.matrix3.col(1).length();
-            (major / aspect_ratio, major)
+            (major, major / aspect_ratio)
         };
 
         let flags = if state.additive {

@@ -7,18 +7,21 @@ use std::{
 
 use crate::{
 	animation::Animations,
-	components::{Component, RefreshData},
-	drawing::{self, ANSI_BOLD_CODE, ANSI_RESET_CODE, Boundary, push_scissor_stack, push_transform_stack},
+	components::{self, Component, ComponentWeak, FocusChangeData, RefreshData},
+	drawing::{
+		self, ANSI_BOLD_CODE, ANSI_RESET_CODE, Boundary, PushScissorStackResult, push_scissor_stack, push_transform_stack,
+	},
 	event::{self, CallbackDataCommon, EventAlterables},
 	globals::WguiGlobals,
 	sound::WguiSoundType,
 	task::Tasks,
+	theme::WguiTheme,
 	widget::{self, EventParams, EventResult, WidgetObj, WidgetState, WidgetStateFlags, div::WidgetDiv},
 };
 
 use anyhow::Context;
 use glam::{Vec2, vec2};
-use slotmap::{HopSlotMap, SecondaryMap, new_key_type};
+use slotmap::{SecondaryMap, SlotMap, new_key_type};
 use taffy::{NodeId, TaffyTree, TraversePartialTree};
 
 new_key_type! {
@@ -57,7 +60,7 @@ impl WeakWidget {
 	}
 }
 
-pub struct WidgetMap(HopSlotMap<WidgetID, Widget>);
+pub struct WidgetMap(SlotMap<WidgetID, Widget>);
 pub type WidgetNodeMap = SecondaryMap<WidgetID, taffy::NodeId>;
 
 #[derive(Clone)]
@@ -68,7 +71,7 @@ pub struct WidgetPair {
 
 impl WidgetMap {
 	fn new() -> Self {
-		Self(HopSlotMap::with_key())
+		Self(SlotMap::<WidgetID, Widget>::with_key())
 	}
 
 	pub fn get_as<T: 'static>(&self, handle: WidgetID) -> Option<RefMut<'_, T>> {
@@ -116,6 +119,7 @@ impl WidgetMap {
 
 pub struct LayoutState {
 	pub globals: WguiGlobals,
+	pub theme: Rc<WguiTheme>,
 	pub widgets: WidgetMap,
 	pub nodes: WidgetNodeMap,
 	pub tree: taffy::tree::TaffyTree<WidgetID>,
@@ -134,14 +138,17 @@ pub struct LayoutUpdateResult {
 	pub sounds_to_play: Vec<WguiSoundType>,
 }
 
-pub type ModifyLayoutStateFunc = Box<dyn FnOnce(ModifyLayoutStateData) -> anyhow::Result<()>>;
+pub type LayoutModifyStateFunc = Box<dyn FnOnce(ModifyLayoutStateData) -> anyhow::Result<()>>;
+pub type LayoutDispatchFunc = Box<dyn FnOnce(&mut CallbackDataCommon) -> anyhow::Result<()>>;
 
 pub enum LayoutTask {
 	RemoveWidget(WidgetID),
 	SetWidgetStyle(WidgetID, event::StyleSetRequest),
-	ModifyLayoutState(ModifyLayoutStateFunc),
+	ModifyLayoutState(LayoutModifyStateFunc),
 	PlaySound(WguiSoundType),
-	Dispatch(Box<dyn FnOnce(&mut CallbackDataCommon) -> anyhow::Result<()>>),
+	Dispatch(LayoutDispatchFunc),
+	SetFocus(ComponentWeak),
+	Unfocus,
 }
 
 pub type LayoutTasks = Tasks<LayoutTask>;
@@ -152,8 +159,9 @@ pub struct Layout {
 	pub tasks: LayoutTasks,
 
 	components_to_refresh_once: HashSet<Component>,
-	registered_components_to_refresh: HashMap<taffy::NodeId, Component>,
+	registered_components_to_refresh: HashMap<taffy::NodeId, ComponentWeak>,
 	sounds_to_play_once: Vec<WguiSoundType>,
+	focused_component: Option<ComponentWeak>,
 
 	pub widgets_to_tick: Vec<WidgetID>,
 
@@ -179,6 +187,7 @@ pub struct Layout {
 #[derive(Default)]
 pub struct LayoutParams {
 	pub resize_to_parent: bool,
+	pub theme: Rc<WguiTheme>,
 }
 
 fn add_child_internal(
@@ -358,14 +367,14 @@ impl Layout {
 	}
 
 	// call ComponentTrait::refresh() *every time time* the layout is dirty
-	pub fn register_component_refresh(&mut self, component: Component) {
+	pub fn register_component_refresh(&mut self, component: &Component) {
 		let widget_id = component.0.base().get_id();
 		let Some(node_id) = self.state.nodes.get(widget_id) else {
 			debug_assert!(false);
 			return;
 		};
 
-		self.registered_components_to_refresh.insert(*node_id, component);
+		self.registered_components_to_refresh.insert(*node_id, component.weak());
 	}
 
 	/// Convenience function to avoid repeated `WidgetID` → `WidgetState` lookups.
@@ -455,7 +464,10 @@ impl Layout {
 			style,
 		);
 
-		if scissor_result.should_display() {
+		if scissor_result
+			.as_ref()
+			.is_none_or(PushScissorStackResult::should_display)
+		{
 			// check children first
 			self.push_event_children(node_id, event, event_result, alterables, user_data)?;
 
@@ -472,7 +484,9 @@ impl Layout {
 			}
 		}
 
-		alterables.scissor_stack.pop();
+		if scissor_result.is_some() {
+			alterables.scissor_stack.pop();
+		}
 		alterables.transform_stack.pop();
 
 		Ok(())
@@ -515,12 +529,13 @@ impl Layout {
 		Ok(event_result)
 	}
 
-	pub fn new(globals: WguiGlobals, params: &LayoutParams) -> anyhow::Result<Self> {
+	pub fn new(globals: WguiGlobals, params: LayoutParams) -> anyhow::Result<Self> {
 		let mut state = LayoutState {
 			tree: TaffyTree::new(),
 			widgets: WidgetMap::new(),
 			nodes: WidgetNodeMap::default(),
 			globals,
+			theme: params.theme,
 		};
 
 		let size = if params.resize_to_parent {
@@ -581,6 +596,7 @@ impl Layout {
 			widgets_to_tick: Vec::new(),
 			tasks: LayoutTasks::new(),
 			sounds_to_play_once: Vec::new(),
+			focused_component: None,
 		})
 	}
 
@@ -590,8 +606,10 @@ impl Layout {
 			return;
 		}
 
-		if let Some(component) = self.registered_components_to_refresh.get(&node_id) {
-			to_refresh.push(component.clone());
+		if let Some(component) = self.registered_components_to_refresh.get(&node_id)
+			&& let Some(c) = component.upgrade()
+		{
+			to_refresh.push(Component(c));
 		}
 
 		for child_id in self.state.tree.child_ids(node_id) {
@@ -708,15 +726,48 @@ impl Layout {
 					c.finish()?;
 				}
 				LayoutTask::SetWidgetStyle(widget_id, style_request) => {
-					self.set_style_request(widget_id, style_request);
+					self.set_style_request(widget_id, &style_request);
 				}
+				LayoutTask::SetFocus(weak) => {
+					if let Some(c) = weak.upgrade() {
+						self.set_focus(Some(&components::Component(c)))?;
+					}
+				}
+				LayoutTask::Unfocus => self.set_focus(None)?,
 			}
 		}
 
 		Ok(())
 	}
 
-	fn set_style_request(&mut self, widget_id: WidgetID, style_request: event::StyleSetRequest) {
+	pub fn set_focus(&mut self, to_focus: Option<&Component>) -> anyhow::Result<()> {
+		let mut c = self.start_common();
+
+		if let Some(focused) = &c.layout.focused_component
+			&& let Some(focused) = focused.upgrade()
+		{
+			// Unfocus
+			focused.on_focus_change(&mut FocusChangeData {
+				common: &mut c.common(),
+				focused: false,
+			});
+			c.layout.focused_component = None;
+		}
+
+		if let Some(to_focus) = to_focus {
+			to_focus.0.on_focus_change(&mut FocusChangeData {
+				common: &mut c.common(),
+				focused: true,
+			});
+
+			c.layout.focused_component = Some(to_focus.weak());
+		}
+
+		c.finish()?;
+		Ok(())
+	}
+
+	fn set_style_request(&mut self, widget_id: WidgetID, style_request: &event::StyleSetRequest) {
 		let Some(node_id) = self.state.nodes.get(widget_id) else {
 			return;
 		};
@@ -728,22 +779,26 @@ impl Layout {
 		match style_request {
 			event::StyleSetRequest::Display(display) => {
 				// refresh the component in case if visibility/display mode has changed
-				if cur_style.display != display
+				if cur_style.display != *display
 					&& let Some(component) = self.registered_components_to_refresh.get(node_id)
+					&& let Some(c) = component.upgrade()
 				{
-					self.components_to_refresh_once.insert(component.clone());
+					self.components_to_refresh_once.insert(Component(c));
 				}
 
-				cur_style.display = display;
+				cur_style.display = *display;
 			}
 			event::StyleSetRequest::Margin(margin) => {
-				cur_style.margin = margin;
+				cur_style.margin = *margin;
 			}
 			event::StyleSetRequest::Width(val) => {
-				cur_style.size.width = val;
+				cur_style.size.width = *val;
 			}
 			event::StyleSetRequest::Height(val) => {
-				cur_style.size.height = val;
+				cur_style.size.height = *val;
+			}
+			event::StyleSetRequest::Size(size) => {
+				cur_style.size = *size;
 			}
 		}
 
@@ -786,8 +841,14 @@ impl Layout {
 			}
 		}
 
-		for (widget_id, style_request) in alterables.style_set_requests {
-			self.set_style_request(widget_id, style_request);
+		for c in alterables.components_to_refresh_once {
+			if let Some(c) = c.upgrade() {
+				self.defer_component_refresh(components::Component(c));
+			}
+		}
+
+		for (widget_id, style_request) in &alterables.style_set_requests {
+			self.set_style_request(*widget_id, style_request);
 		}
 
 		Ok(())

@@ -14,8 +14,8 @@ use wgui::{
     drawing,
     event::{
         CallbackDataCommon, Event as WguiEvent, EventAlterables, EventCallback, EventListenerID,
-        EventListenerKind, InternalStateChangeEvent, MouseButtonIndex, MouseDownEvent,
-        MouseLeaveEvent, MouseMotionEvent, MouseUpEvent, MouseWheelEvent,
+        EventListenerKind, InternalStateChangeEvent, MouseButtonEvent, MouseButtonIndex,
+        MouseLeaveEvent, MouseMotionEvent, MouseWheelEvent,
     },
     gfx::cmd::WGfxClearMode,
     i18n::Translation,
@@ -147,8 +147,9 @@ impl<S: 'static> GuiPanel<S> {
 
         let (mut layout, mut parser_state) = wgui::parser::new_layout_from_assets(
             &doc_params,
-            &LayoutParams {
+            LayoutParams {
                 resize_to_parent: params.resize_to_parent,
+                theme: app.wgui_theme.clone(),
             },
         )?;
 
@@ -416,13 +417,13 @@ impl<S: 'static> OverlayBackend for GuiPanel<S> {
         };
 
         let e = if pressed {
-            WguiEvent::MouseDown(MouseDownEvent {
+            WguiEvent::MouseDown(MouseButtonEvent {
                 pos: hit.uv * self.layout.content_size,
                 index,
                 device: hit.pointer,
             })
         } else {
-            WguiEvent::MouseUp(MouseUpEvent {
+            WguiEvent::MouseUp(MouseButtonEvent {
                 pos: hit.uv * self.layout.content_size,
                 index,
                 device: hit.pointer,

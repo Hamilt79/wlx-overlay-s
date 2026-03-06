@@ -32,7 +32,7 @@ use regex::Regex;
 use slotmap::{SlotMap, new_key_type};
 use wgui::{
     drawing,
-    event::{InternalStateChangeEvent, MouseButton, MouseButtonIndex},
+    event::{InternalStateChangeEvent, MouseButtonEvent, MouseButtonIndex},
 };
 use wlx_common::windowing::{OverlayWindowState, Positioning};
 use wlx_common::{
@@ -55,6 +55,7 @@ pub fn create_keyboard(app: &mut AppState, wayland: bool) -> anyhow::Result<Over
         processes: vec![],
         overlay_list: OverlayList::default(),
         set_list: SetList::default(),
+        clock_12h: app.session.config.clock_12h,
     };
 
     let auto_labels = layout.auto_labels.unwrap_or(true);
@@ -325,6 +326,7 @@ struct KeyboardState {
     processes: Vec<Child>,
     overlay_list: OverlayList,
     set_list: SetList,
+    clock_12h: bool,
 }
 
 macro_rules! take_and_leave_default {
@@ -343,6 +345,7 @@ impl KeyboardState {
             processes: take_and_leave_default!(&mut self.processes),
             overlay_list: OverlayList::default(),
             set_list: SetList::default(),
+            clock_12h: self.clock_12h,
         }
     }
 }
@@ -387,7 +390,7 @@ fn handle_press(
     app: &mut AppState,
     key: &KeyState,
     keyboard: &mut KeyboardState,
-    button: MouseButton,
+    button: MouseButtonEvent,
 ) {
     match &key.button_state {
         KeyButtonData::Key { vk, pressed } => {

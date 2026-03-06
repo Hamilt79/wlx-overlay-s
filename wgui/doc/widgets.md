@@ -6,7 +6,7 @@
 
 ## [Built-in components](#components)
 
-[Button](#button-component), [Slider](#slider-component), [CheckBox](#checkbox-component)
+[Button](#button-component), [Slider](#slider-component), [CheckBox](#checkbox-component), [Tabs](#tabs-component) ([Tab](#tab-component)), [EditBox](#editbox-component)
 
 ## [Examples](#examples)
 
@@ -60,7 +60,7 @@ _They can be used in any widget/component._
 
 `width`, `height`: **float** | **percent**
 
-### Advanced attributes
+## Advanced attributes
 
 `interactable`: "1" | "0"
 
@@ -73,6 +73,32 @@ _Used in case of overlapping pop-ups or windows, most notably applied to various
 `new_pass`: "1" | "0"
 
 _Set to 1 if you want to render overlapping pop-ups to properly render your widgets in order. Wgui renders with as few Vulkan drawcalls as possible, so this is your responsibility._
+
+## Default Colors
+
+_These colors can be defined by the user to control the color scheme. They always exists and can be used in any place a normal color could be used._
+
+`~color_text`: default: white(#FFFFFF)
+`~color_accent`: default: light blue(#21ADFF)
+`~color_danger`: default: red(#E60000)
+`~color_faded`: default: grey(#ABBDCC)
+`~color_bg`: default: black(#00121ABF) (color_background in config)
+
+_Only the default colors can be changed with the following suffixes._
+
+`_translucent`
+
+_Halves the alpha of the color._
+
+`_10`
+`_20`
+`_30`
+`_40`
+`_50`
+
+_Darkens the color by multiplying it with a percentage. `~color_accent_50` Would be half of the normal brightness but the same alpha. You can't combine the suffixes_
+
+### Color
 
 # Widgets
 
@@ -369,6 +395,56 @@ _optional value that will be set as the RadioGroup's value_
 ### `<RadioGroup>`
 
 ### A radio group. Place `<RadioBox>` components inside this.
+
+## Tabs component
+
+### `<Tabs>`
+
+### A tab bar component
+
+#### Parameters
+
+`id`: **string**
+
+_Unique identifier for the tab group_
+
+Only `<Tab>` components should be placed inside `<Tabs>`.
+
+---
+
+## Tab component
+
+### `<Tab>`
+
+### A single tab inside a `<Tabs>` component
+
+#### Parameters
+
+`name`: **string**
+
+_Unique identifier for the tab_
+
+`translation`: **string**
+
+_Translated by key_
+
+`sprite_src` | `sprite_src_ext` | `sprite_src_builtin` | `sprite_src_internal`
+
+_Image path (see [sprite](#sprite-widget)) for src descriptions_
+
+---
+
+## EditBox component
+
+### `<EditBox>`
+
+### A single-line text input field.
+
+#### Parameters
+
+`text`: **string**
+
+_Initial text content_
 
 ---
 

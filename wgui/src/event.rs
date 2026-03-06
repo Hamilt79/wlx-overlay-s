@@ -1,7 +1,8 @@
 use std::{
 	any::{Any, TypeId},
-	cell::{Ref, RefMut},
+	cell::RefMut,
 	collections::HashSet,
+	rc::{Rc, Weak},
 };
 
 use glam::Vec2;
@@ -9,9 +10,10 @@ use slotmap::{DenseSlotMap, new_key_type};
 
 use crate::{
 	animation::{self, Animation},
+	components::{ComponentTrait, ComponentWeak},
 	globals,
 	i18n::I18n,
-	layout::{LayoutState, LayoutTask, WidgetID},
+	layout::{LayoutDispatchFunc, LayoutState, LayoutTask, WidgetID},
 	sound::WguiSoundType,
 	stack::{ScissorStack, Transform, TransformStack},
 	widget::{EventResult, WidgetData, WidgetObj},
@@ -25,7 +27,7 @@ pub enum MouseButtonIndex {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct MouseButton {
+pub struct MouseButtonEvent {
 	pub index: MouseButtonIndex,
 	pub pos: Vec2,
 	pub device: usize,
@@ -34,12 +36,6 @@ pub struct MouseButton {
 #[derive(Debug, Clone, Copy)]
 pub struct MousePosition {
 	pub pos: Vec2,
-	pub device: usize,
-}
-
-pub struct MouseDownEvent {
-	pub pos: Vec2,
-	pub index: MouseButtonIndex,
 	pub device: usize,
 }
 
@@ -52,16 +48,15 @@ pub struct MouseMotionEvent {
 	pub device: usize,
 }
 
-pub struct MouseUpEvent {
-	pub pos: Vec2,
-	pub index: MouseButtonIndex,
-	pub device: usize,
-}
-
 pub struct MouseWheelEvent {
 	pub pos: Vec2,   /* mouse position */
 	pub delta: Vec2, /* wheel delta */
 	pub device: usize,
+}
+
+#[derive(Clone)]
+pub struct TextInputEvent {
+	pub text: Option<Rc<str>>,
 }
 
 pub struct InternalStateChangeEvent {
@@ -70,11 +65,12 @@ pub struct InternalStateChangeEvent {
 
 pub enum Event {
 	InternalStateChange(InternalStateChangeEvent),
-	MouseDown(MouseDownEvent),
+	MouseDown(MouseButtonEvent),
 	MouseLeave(MouseLeaveEvent),
 	MouseMotion(MouseMotionEvent),
-	MouseUp(MouseUpEvent),
+	MouseUp(MouseButtonEvent),
 	MouseWheel(MouseWheelEvent),
+	TextInput(TextInputEvent),
 }
 
 impl Event {
@@ -101,12 +97,14 @@ pub enum StyleSetRequest {
 	Margin(taffy::Rect<taffy::LengthPercentageAuto>),
 	Width(taffy::Dimension),
 	Height(taffy::Dimension),
+	Size(taffy::Size<taffy::Dimension>),
 }
 
 // alterables which will be dispatched in the next loop iteration phase
 #[derive(Default)]
 pub struct EventAlterables {
 	pub dirty_widgets: Vec<WidgetID>,
+	pub components_to_refresh_once: Vec<ComponentWeak>,
 	pub style_set_requests: Vec<(WidgetID, StyleSetRequest)>,
 	pub animations: Vec<animation::Animation>,
 	pub widgets_to_tick: HashSet<WidgetID>, // widgets which needs to be ticked in the next `Layout::update()` fn
@@ -147,8 +145,20 @@ impl EventAlterables {
 		self.tasks.push(LayoutTask::PlaySound(sound_type));
 	}
 
-	pub fn dispatch(&mut self, func: Box<dyn FnOnce(&mut CallbackDataCommon) -> anyhow::Result<()>>) {
-		self.tasks.push(LayoutTask::Dispatch(func))
+	pub fn dispatch(&mut self, func: LayoutDispatchFunc) {
+		self.tasks.push(LayoutTask::Dispatch(func));
+	}
+
+	pub fn focus<ComponentType: ComponentTrait>(&mut self, component: &Weak<ComponentType>) {
+		self.tasks.push(LayoutTask::SetFocus(component.clone()));
+	}
+
+	pub fn unfocus(&mut self) {
+		self.tasks.push(LayoutTask::Unfocus);
+	}
+
+	pub fn refresh_component_once<ComponentType: ComponentTrait>(&mut self, component: &Weak<ComponentType>) {
+		self.components_to_refresh_once.push(component.clone());
 	}
 }
 
@@ -171,10 +181,6 @@ impl CallbackDataCommon<'_> {
 	pub fn globals(&self) -> RefMut<'_, globals::Globals> {
 		self.state.globals.get()
 	}
-
-	pub fn defaults(&self) -> Ref<'_, globals::Defaults> {
-		self.state.globals.defaults()
-	}
 }
 
 pub struct CallbackData<'a> {
@@ -187,8 +193,9 @@ pub struct CallbackData<'a> {
 
 pub enum CallbackMetadata {
 	None,
-	MouseButton(MouseButton),
+	MouseButton(MouseButtonEvent),
 	MousePosition(MousePosition),
+	TextInput(TextInputEvent),
 	Custom(usize),
 }
 
@@ -197,9 +204,10 @@ impl CallbackMetadata {
 
 	pub const fn get_mouse_pos_absolute(&self) -> Option<Vec2> {
 		match *self {
-			Self::MouseButton(b) => Some(b.pos),
-			Self::MousePosition(b) => Some(b.pos),
-			Self::Custom(_) | Self::None => None,
+			CallbackMetadata::MouseButton(b) => Some(b.pos),
+			CallbackMetadata::MousePosition(b) => Some(b.pos),
+			CallbackMetadata::Custom(_) | CallbackMetadata::None => None,
+			CallbackMetadata::TextInput(_) => None,
 		}
 	}
 
@@ -216,6 +224,7 @@ pub enum EventListenerKind {
 	MouseEnter,
 	MouseMotion,
 	MouseLeave,
+	TextInput,
 	InternalStateChange,
 }
 

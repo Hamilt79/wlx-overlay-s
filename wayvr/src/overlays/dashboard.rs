@@ -8,8 +8,8 @@ use wayvr_ipc::{
 };
 use wgui::{
     event::{
-        Event as WguiEvent, MouseButtonIndex, MouseDownEvent, MouseLeaveEvent, MouseMotionEvent,
-        MouseUpEvent, MouseWheelEvent,
+        Event as WguiEvent, MouseButtonEvent, MouseButtonIndex, MouseLeaveEvent, MouseMotionEvent,
+        MouseWheelEvent,
     },
     gfx::cmd::WGfxClearMode,
     renderer_vk::context::Context as WguiContext,
@@ -17,12 +17,16 @@ use wgui::{
 };
 use wlx_common::{
     dash_interface::{self, DashInterface, RecenterMode},
+    locale::WayVRLangProvider,
     overlays::{BackendAttrib, BackendAttribValue},
 };
 use wlx_common::{
     timestep::Timestep,
     windowing::{OverlayWindowState, Positioning},
 };
+
+#[cfg(feature = "openxr")]
+use libmonado::{ClientLogic, DeviceLogic};
 
 use crate::{
     RESTART, RUNNING,
@@ -73,13 +77,12 @@ impl DashFrontend {
             let _ = interface.process_launch(app, false, p)?;
         }
 
-        let frontend = frontend::Frontend::new(
-            frontend::InitParams {
-                interface: Box::new(interface),
-                has_monado: matches!(app.xr_backend, XrBackend::OpenXR),
-            },
-            app,
-        )?;
+        let frontend = frontend::Frontend::new(frontend::InitParams {
+            interface: Box::new(interface),
+            lang_provider: &WayVRLangProvider::from_config(&app.session.config),
+            has_monado: matches!(app.xr_backend, XrBackend::OpenXR),
+            theme: app.wgui_theme.clone(),
+        })?;
 
         frontend
             .tasks
@@ -242,13 +245,13 @@ impl OverlayBackend for DashFrontend {
         };
 
         let e = if pressed {
-            WguiEvent::MouseDown(MouseDownEvent {
+            WguiEvent::MouseDown(MouseButtonEvent {
                 pos: hit.uv * self.inner.layout.content_size,
                 index,
                 device: hit.pointer,
             })
         } else {
-            WguiEvent::MouseUp(MouseUpEvent {
+            WguiEvent::MouseUp(MouseButtonEvent {
                 pos: hit.uv * self.inner.layout.content_size,
                 index,
                 device: hit.pointer,
@@ -499,12 +502,7 @@ impl DashInterface<AppState> for DashInterfaceLive {
             return Ok(()); // no monado avoilable
         };
 
-        monado_client_focus(monado, name)?;
-
-        // Restart monado (BUG!)
-        // https://gitlab.freedesktop.org/monado/monado/-/issues/497
-        app.monado_init();
-        Ok(())
+        monado_client_focus(monado, name)
     }
 
     #[cfg(feature = "openxr")]
@@ -546,8 +544,6 @@ impl DashInterface<AppState> for DashInterfaceLive {
     }
 }
 
-const CLIENT_NAME_BLACKLIST: [&str; 3] = ["wayvr", "libmonado", "oscavmgr"];
-
 #[cfg(feature = "openxr")]
 fn monado_get_brightness(monado: &mut libmonado::Monado) -> Option<f32> {
     let device = monado.device_from_role(libmonado::DeviceRole::Head).ok()?;
@@ -570,15 +566,15 @@ fn monado_list_clients_filtered(
     let clients: Vec<_> = clients
         .iter_mut()
         .filter_map(|client| {
-            let Ok(name) = client.name() else {
+            use libmonado::ClientState;
+            let Ok(state) = client.state() else {
                 return None;
             };
 
-            for cell in CLIENT_NAME_BLACKLIST {
-                if cell == name {
-                    // blacklisted!
-                    return None;
-                }
+            if !state.contains(ClientState::ClientSessionActive)
+                || state.contains(ClientState::ClientSessionOverlay)
+            {
+                return None;
             }
 
             Some(client.clone())

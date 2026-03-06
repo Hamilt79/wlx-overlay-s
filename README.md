@@ -31,6 +31,7 @@ There are multiple ways to install WayVR:
 
 1. AppImage: Download from [Releases](https://github.com/wlx-team/wayvr/releases)
 1. AUR package: [wayvr](https://aur.archlinux.org/packages/wayvr) or [wayvr-git](https://aur.archlinux.org/packages/wayvr-git) 
+1. Nix package: [wayvr](https://search.nixos.org/packages?channel=unstable&show=wayvr&query=wayvr) or [unstable package from nixpkgs-xr](https://github.com/nix-community/nixpkgs-xr)
 1. [Building from source](https://github.com/wlx-team/wayvr/wiki/Building-from-Source).
 
 ### General Setup
@@ -143,10 +144,22 @@ Typing
 
 ![Touch Controller Bindings](https://github.com/wlx-team/wayvr/blob/guide/wlx-oculus.png)
 
-To customize bindings on OpenXR, refer to the [OpenXR Bindings wiki page](https://github.com/wlx-team/wayvr/wiki/OpenXR-Bindings).
 
-If your bindings are not supported, please reach out. \
+### Changing Bindings
+
+SteamVR: Simply change the bindings from the SteamVR bindings section. If WayVR doesn't show up on the list, select any other title and then press back on the top left. (SteamVR is weird like that sometimes)
+
+OpenXR (Monado/WiVRn): See [Wiki: OpenXR Bindings](https://github.com/wlx-team/wayvr/wiki/OpenXR-Bindings)
+
+If your controllers are not supported, please reach out. \
 We would like to work with you and include additional bindings.
+
+## Customization
+
+See these relevant wiki pages:
+- For all available config options, check [Wiki: Configuration](https://github.com/wlx-team/wayvr/wiki/Configuration)
+- Looking to customize look & feel, or add functionality? See [Wiki: Customization](https://github.com/wlx-team/wayvr/wiki/Customization)
+- Looking to change the OpenXR background? See [Wiki: OpenXR Skybox](https://github.com/wlx-team/wayvr/wiki/OpenXR-Skybox)
 
 ## Troubleshooting
 

@@ -1,5 +1,6 @@
 mod component_button;
 mod component_checkbox;
+mod component_editbox;
 mod component_radio_group;
 mod component_slider;
 mod component_tabs;
@@ -22,6 +23,7 @@ use crate::{
 	parser::{
 		component_button::parse_component_button,
 		component_checkbox::{CheckboxKind, parse_component_checkbox},
+		component_editbox::parse_component_editbox,
 		component_radio_group::parse_component_radio_group,
 		component_slider::parse_component_slider,
 		component_tabs::parse_component_tabs,
@@ -460,7 +462,7 @@ impl ParserContext<'_> {
 	}
 
 	fn populate_theme_variables(&mut self) {
-		let def = self.doc_params.globals.defaults();
+		let theme = self.layout.state.theme.clone();
 
 		macro_rules! insert_color_vars {
 			($self:expr, $name:literal, $field:expr, $alpha:expr) => {
@@ -477,11 +479,11 @@ impl ParserContext<'_> {
 			};
 		}
 
-		insert_color_vars!(self, "text", def.text_color, def.translucent_alpha);
-		insert_color_vars!(self, "accent", def.accent_color, def.translucent_alpha);
-		insert_color_vars!(self, "danger", def.danger_color, def.translucent_alpha);
-		insert_color_vars!(self, "faded", def.faded_color, def.translucent_alpha);
-		insert_color_vars!(self, "bg", def.bg_color, def.translucent_alpha);
+		insert_color_vars!(self, "text", theme.text_color, theme.translucent_alpha);
+		insert_color_vars!(self, "accent", theme.accent_color, theme.translucent_alpha);
+		insert_color_vars!(self, "danger", theme.danger_color, theme.translucent_alpha);
+		insert_color_vars!(self, "faded", theme.faded_color, theme.translucent_alpha);
+		insert_color_vars!(self, "bg", theme.bg_color, theme.translucent_alpha);
 	}
 
 	fn print_invalid_attrib(&self, tag_name: &str, key: &str, value: &str) {
@@ -1053,6 +1055,7 @@ fn parse_child<'a>(
 				file, ctx, child_node, parent_id, &attribs, tag_name,
 			)?);
 		}
+		"EditBox" => new_widget_id = Some(parse_component_editbox(ctx, parent_id, &attribs, tag_name)?),
 		"Tabs" => {
 			new_widget_id = Some(parse_component_tabs(ctx, child_node, parent_id, &attribs, tag_name)?);
 		}
@@ -1229,7 +1232,7 @@ pub fn parse_from_assets(
 
 pub fn new_layout_from_assets(
 	doc_params: &ParseDocumentParams,
-	layout_params: &LayoutParams,
+	layout_params: LayoutParams,
 ) -> anyhow::Result<(Layout, ParserState)> {
 	let mut layout = Layout::new(doc_params.globals.clone(), layout_params)?;
 	let widget = layout.content_root_widget;

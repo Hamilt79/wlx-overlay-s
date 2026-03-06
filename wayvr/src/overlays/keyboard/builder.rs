@@ -19,6 +19,7 @@ use wgui::{
     drawing::{self, Color},
     event::{self, CallbackMetadata, EventAlterables, EventListenerKind},
     layout::LayoutUpdateParams,
+    log::LogErr,
     parser::{Fetchable, ParseDocumentParams},
     renderer_vk::util,
     taffy::{self, prelude::length},
@@ -52,11 +53,9 @@ pub(super) fn create_keyboard_panel(
 
     let doc_params = new_doc_params(&mut panel);
 
-    let globals = app.wgui_globals.clone();
-
     let (accent_color, anim_mult) = {
-        let def = globals.defaults();
-        (def.accent_color, def.animation_mult)
+        let theme = &app.wgui_theme;
+        (theme.accent_color, theme.animation_mult)
     };
 
     let root = panel
@@ -284,14 +283,30 @@ pub(super) fn create_keyboard_panel(
                 &doc_params,
             )?;
 
-            if elems_changed {
-                panel.process_custom_elems(app);
-            }
-
             match event_data {
                 OverlayEventData::SettingsChanged => {
                     panel.state.alt_modifier =
                         alt_modifier_to_key(app.session.config.keyboard_middle_click_mode);
+
+                    if app.session.config.clock_12h != panel.state.clock_12h {
+                        panel.state.clock_12h = app.session.config.clock_12h;
+
+                        if let Ok(clock_root) = panel
+                            .parser_state
+                            .get_widget_id("clock_root")
+                            .log_warn("keyboard.xml may be out of date")
+                        {
+                            panel.layout.remove_children(clock_root);
+                            panel.parser_state.instantiate_template(
+                                &doc_params,
+                                "Clock",
+                                &mut panel.layout,
+                                clock_root,
+                                Default::default(),
+                            )?;
+                            elems_changed = true;
+                        }
+                    }
                 }
 
                 OverlayEventData::CustomCommand { element, command } => {
@@ -301,6 +316,10 @@ pub(super) fn create_keyboard_panel(
                 }
 
                 _ => {}
+            }
+
+            if elems_changed {
+                panel.process_custom_elems(app);
             }
 
             panel.layout.process_alterables(alterables)?;
