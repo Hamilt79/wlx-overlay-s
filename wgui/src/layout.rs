@@ -339,15 +339,14 @@ impl Layout {
 	}
 
 	fn process_pending_components(&mut self, alterables: &mut EventAlterables) {
-		for comp in &self.components_to_refresh_once {
+		for comp in std::mem::take(&mut self.components_to_refresh_once) {
 			let mut common = CallbackDataCommon {
 				state: &self.state,
 				alterables,
 			};
 
-			comp.0.refresh(&mut RefreshData { common: &mut common });
+			comp.0.refresh(&mut RefreshData { layout: self });
 		}
-		self.components_to_refresh_once.clear();
 	}
 
 	fn process_pending_widget_ticks(&mut self, alterables: &mut EventAlterables) {
@@ -377,7 +376,7 @@ impl Layout {
 		self.registered_components_to_refresh.insert(*node_id, component.weak());
 	}
 
-	/// Convenience function to avoid repeated `WidgetID` → `WidgetState` lookups.
+	/// Convenience function to avoid repeated `WidgetID` → `WidgetState` look-ups.
 	pub fn add_event_listener<U1: 'static, U2: 'static>(
 		&self,
 		widget_id: WidgetID,
@@ -883,6 +882,7 @@ impl Layout {
 			widget::WidgetType::Label => drawing::Color::new(0.4, 1.0, 0.0, 1.0),
 			widget::WidgetType::Sprite => drawing::Color::new(0.0, 0.8, 1.0, 1.0),
 			widget::WidgetType::Rectangle => drawing::Color::new(1.0, 0.5, 0.2, 1.0),
+			widget::WidgetType::CustomDraw => drawing::Color::new(1.0, 1.0, 1.0, 1.0),
 		};
 
 		let line = format!(

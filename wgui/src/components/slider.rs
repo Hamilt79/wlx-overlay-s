@@ -101,8 +101,7 @@ pub struct SliderValueChangedEvent {
 	pub value: f32,
 }
 
-pub type SliderValueChangedCallback =
-	Box<dyn Fn(&mut CallbackDataCommon, SliderValueChangedEvent) -> anyhow::Result<()>>;
+pub type SliderValueChangedCallback = Box<dyn Fn(&mut CallbackDataCommon, SliderValueChangedEvent)>;
 
 pub struct ComponentSlider {
 	base: ComponentBase,
@@ -111,10 +110,14 @@ pub struct ComponentSlider {
 }
 
 impl ComponentTrait for ComponentSlider {
-	fn refresh(&self, init_data: &mut RefreshData) {
+	fn refresh(&self, data: &mut RefreshData) {
+		// FIXME: refactor this after merging feat-skybox-catalog branch
+		let mut lc = data.layout.start_common();
+		let mut common = lc.common();
 		let mut state = self.state.borrow_mut();
 		let value = state.values.value;
-		state.set_value(init_data.common, &self.data, value);
+		state.set_value(&mut common, &self.data, value);
+		let _ = lc.finish();
 	}
 
 	fn base(&self) -> &ComponentBase {
@@ -250,15 +253,13 @@ impl State {
 			Self::update_text(common, &mut label, self.values.value);
 		}
 
-		if changed
-			&& let Some(on_value_changed) = &self.on_value_changed
-			&& let Err(e) = on_value_changed(
+		if changed && let Some(on_value_changed) = &self.on_value_changed {
+			on_value_changed(
 				common,
 				SliderValueChangedEvent {
 					value: self.values.value,
 				},
-			) {
-			log::error!("{e:?}"); // FIXME: proper error handling
+			)
 		}
 	}
 }

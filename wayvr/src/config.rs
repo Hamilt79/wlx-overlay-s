@@ -6,8 +6,8 @@ use wayvr_ipc::packet_client::WvrProcessLaunchParams;
 use wlx_common::{
     astr_containers::AStrMap,
     config::{
-        AltModifier, CaptureMethod, GeneralConfig, HandsfreePointer, SerializedWindowSet,
-        SerializedWindowStates,
+        AltModifier, CaptureMethod, ChromaKeyParams, GeneralConfig, HandsfreePointer,
+        SerializedWindowSet, SerializedWindowStates,
     },
     config_io,
     locale::Language,
@@ -22,9 +22,6 @@ const FILES: [&str; 1] = ["keyboard.yaml"];
 #[repr(usize)]
 pub enum ConfigType {
     Keyboard,
-    Watch,
-    Settings,
-    Anchor,
 }
 
 pub fn load_known_yaml<T>(config_type: ConfigType) -> T
@@ -143,9 +140,11 @@ pub struct AutoSettings {
     pub context_menu_hold_and_release: bool,
     pub capture_method: CaptureMethod,
     pub keyboard_middle_click_mode: AltModifier,
+    pub keyboard_swipe_to_type_enabled: bool,
     pub autostart_apps: Vec<WvrProcessLaunchParams>,
     pub handsfree_pointer: HandsfreePointer,
     pub language: Option<Language>,
+    pub chroma_key_params: ChromaKeyParams,
 }
 
 fn get_settings_path() -> PathBuf {
@@ -194,9 +193,11 @@ pub fn save_settings(config: &GeneralConfig) -> anyhow::Result<()> {
         context_menu_hold_and_release: config.context_menu_hold_and_release,
         capture_method: config.capture_method,
         keyboard_middle_click_mode: config.keyboard_middle_click_mode,
+        keyboard_swipe_to_type_enabled: config.keyboard_swipe_to_type_enabled,
         autostart_apps: config.autostart_apps.clone(),
         handsfree_pointer: config.handsfree_pointer,
         language: config.language,
+        chroma_key_params: config.chroma_key_params.clone(),
     };
 
     let json = serde_json::to_string_pretty(&conf).unwrap(); // want panic

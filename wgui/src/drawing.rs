@@ -102,7 +102,7 @@ impl Boundary {
 	}
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Color {
 	pub r: f32,
 	pub g: f32,
@@ -180,7 +180,15 @@ impl Color {
 	}
 
 	#[must_use]
-	pub fn as_arr(&self) -> [f32; 4] {
+	pub fn to_hex_rgb(&self) -> String {
+		let r = (self.r.clamp(0.0, 1.0) * 255.0).round() as u8;
+		let g = (self.g.clamp(0.0, 1.0) * 255.0).round() as u8;
+		let b = (self.b.clamp(0.0, 1.0) * 255.0).round() as u8;
+		format!("#{r:02X}{g:02X}{b:02X}")
+	}
+
+	#[must_use]
+	pub const fn as_arr(&self) -> [f32; 4] {
 		[self.r, self.b, self.g, self.a]
 	}
 }
@@ -189,6 +197,68 @@ impl Default for Color {
 	fn default() -> Self {
 		// opaque black
 		Self::new(0.0, 0.0, 0.0, 1.0)
+	}
+}
+
+pub struct HsvColor {
+	pub h: f32,
+	pub s: f32,
+	pub v: f32,
+	pub a: f32,
+}
+
+impl HsvColor {
+	pub const fn new(h: f32, s: f32, v: f32, a: f32) -> Self {
+		Self { h, s, v, a }
+	}
+
+	pub fn to_rgb(&self) -> Color {
+		if self.s == 0.0 {
+			// gray
+			return Color::new(self.v, self.v, self.v, 1.0);
+		}
+
+		let h6 = self.h * 6.0;
+		let i = h6.floor();
+		let f = h6 - i;
+
+		let p = self.v * (1.0 - self.s);
+		let q = self.v * (1.0 - self.s * f);
+		let t = self.v * (1.0 - self.s * (1.0 - f));
+
+		let (r, g, b) = match i as i32 % 6 {
+			0 => (self.v, t, p),
+			1 => (q, self.v, p),
+			2 => (p, self.v, t),
+			3 => (p, q, self.v),
+			4 => (t, p, self.v),
+			_ => (self.v, p, q),
+		};
+
+		Color::new(r, g, b, 1.0)
+	}
+}
+
+impl From<Color> for HsvColor {
+	fn from(value: Color) -> Self {
+		let max = value.r.max(value.g).max(value.b);
+		let min = value.r.min(value.g).min(value.b);
+		let delta = max - min;
+
+		let h = if delta == 0.0 {
+			0.0
+		} else if max == value.r {
+			(((value.g - value.b) / delta) / 6.0 + 1.0) % 1.0
+		} else if max == value.g {
+			((value.b - value.r) / delta + 2.0) / 6.0
+		} else {
+			((value.r - value.g) / delta + 4.0) / 6.0
+		};
+
+		let s = if max == 0.0 { 0.0 } else { delta / max };
+		let v = max;
+
+		Self::new(h, s, v, value.a)
 	}
 }
 
@@ -225,11 +295,13 @@ pub struct ImagePrimitive {
 	pub round_units: u8,
 }
 
+#[derive(Clone)]
 pub struct PrimitiveExtent {
 	pub(super) boundary: Boundary,
 	pub(super) transform: Mat4,
 }
 
+#[derive(Clone)]
 pub enum RenderPrimitive {
 	NewPass,
 	Rectangle(PrimitiveExtent, Rectangle),
@@ -306,7 +378,7 @@ impl PushScissorStackResult {
 	}
 }
 
-/// Returns Some() if scissor has been pushed.
+/// Returns `Some()` if scissor has been pushed.
 pub fn push_scissor_stack(
 	transform_stack: &mut TransformStack,
 	scissor_stack: &mut ScissorStack,

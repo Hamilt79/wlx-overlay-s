@@ -41,6 +41,7 @@ const PATH_SHOW_HIDE: &str = "/actions/default/in/ShowHide";
 const PATH_SPACE_DRAG: &str = "/actions/default/in/SpaceDrag";
 const PATH_SPACE_FLING: &str = "/actions/default/in/SpaceFling";
 const PATH_SPACE_ROTATE: &str = "/actions/default/in/SpaceRotate";
+const PATH_SPACE_RESET: &str = "/actions/default/in/SpaceReset";
 const PATH_TOGGLE_DASHBOARD: &str = "/actions/default/in/ToggleDashboard";
 
 const INPUT_ANY: InputValueHandle = InputValueHandle(ovr_overlay::sys::k_ulInvalidInputValueHandle);
@@ -57,6 +58,7 @@ pub(super) struct OpenVrInputSource {
     space_drag_hnd: ActionHandle,
     space_fling_hnd: ActionHandle,
     space_rotate_hnd: ActionHandle,
+    space_reset_hnd: ActionHandle,
     click_modifier_right_hnd: ActionHandle,
     click_modifier_middle_hnd: ActionHandle,
     move_mouse_hnd: ActionHandle,
@@ -83,6 +85,7 @@ impl OpenVrInputSource {
         let space_drag_hnd = input.get_action_handle(PATH_SPACE_DRAG)?;
         let space_fling_hnd = input.get_action_handle(PATH_SPACE_FLING)?;
         let space_rotate_hnd = input.get_action_handle(PATH_SPACE_ROTATE)?;
+        let space_reset_hnd = input.get_action_handle(PATH_SPACE_RESET)?;
         let click_modifier_right_hnd = input.get_action_handle(PATH_CLICK_MODIFIER_RIGHT)?;
         let click_modifier_middle_hnd = input.get_action_handle(PATH_CLICK_MODIFIER_MIDDLE)?;
         let move_mouse_hnd = input.get_action_handle(PATH_MOVE_MOUSE)?;
@@ -122,6 +125,7 @@ impl OpenVrInputSource {
             space_drag_hnd,
             space_fling_hnd,
             space_rotate_hnd,
+            space_reset_hnd,
             click_modifier_right_hnd,
             click_modifier_middle_hnd,
             move_mouse_hnd,
@@ -162,7 +166,7 @@ impl OpenVrInputSource {
             // global input from overlays is enabled in SteamVR developer settings
             // (taken from https://github.com/ValveSoftware/openvr/issues/1236)
             nPriority: if should_block_input_left {
-                0x01000000
+                0x0100_0000
             } else {
                 0x0
             },
@@ -174,7 +178,7 @@ impl OpenVrInputSource {
             ulSecondaryActionSet: 0,
             unPadding: 0,
             nPriority: if should_block_input_right {
-                0x01000000
+                0x0100_0000
             } else {
                 0x0
             },
@@ -249,6 +253,11 @@ impl OpenVrInputSource {
 
             app_hand.now.space_rotate = input
                 .get_digital_action_data(self.space_rotate_hnd, hand.input_hnd)
+                .map(|x| x.0.bState)
+                .unwrap_or(false);
+
+            app_hand.now.space_reset = input
+                .get_digital_action_data(self.space_reset_hnd, hand.input_hnd)
                 .map(|x| x.0.bState)
                 .unwrap_or(false);
 

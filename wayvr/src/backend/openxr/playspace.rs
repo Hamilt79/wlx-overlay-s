@@ -50,19 +50,19 @@ impl PlayspaceMover {
     }
 
     pub fn handle_task(&mut self, app: &mut AppState, task: PlayspaceTask) {
-        let Some(monado) = &mut app.monado else {
+        let Some(monado) = &mut app.monado_state else {
             return; // monado not available
         };
 
         match task {
             PlayspaceTask::FixFloor => {
-                self.fix_floor(&app.input_state, monado);
+                self.fix_floor(&app.input_state, &mut monado.ipc);
             }
             PlayspaceTask::Reset => {
-                self.reset_offset(monado);
+                self.reset_offset(&mut monado.ipc);
             }
             PlayspaceTask::Recenter => {
-                self.recenter(&app.input_state, monado);
+                self.recenter(&app.input_state, &mut monado.ipc);
             }
         }
     }
@@ -72,7 +72,7 @@ impl PlayspaceMover {
         overlays: &mut OverlayWindowManager<OpenXrOverlayData>,
         app: &mut AppState,
     ) {
-        let Some(monado) = &mut app.monado else {
+        let Some(monado) = &mut app.monado_state else {
             return; // monado not available
         };
 
@@ -80,7 +80,7 @@ impl PlayspaceMover {
             if pointer.now.space_reset {
                 if !pointer.before.space_reset {
                     log::info!("Space reset");
-                    self.reset_offset(monado);
+                    self.reset_offset(&mut monado.ipc);
                 }
                 return;
             }
@@ -119,7 +119,7 @@ impl PlayspaceMover {
 
             data.hand_pose = new_hand;
 
-            apply_offset(data.pose, monado);
+            apply_offset(data.pose, &mut monado.ipc);
             self.rotate = Some(data);
         } else {
             for (i, pointer) in app.input_state.pointers.iter().enumerate() {
@@ -179,7 +179,7 @@ impl PlayspaceMover {
             data.pose.translation += relative_pos;
             data.hand_pose = new_hand;
 
-            apply_offset(data.pose, monado);
+            apply_offset(data.pose, &mut monado.ipc);
             self.drag = Some(data);
         } else {
             for (i, pointer) in app.input_state.pointers.iter().enumerate() {
@@ -227,7 +227,7 @@ impl PlayspaceMover {
 
             if new_pose.translation != self.last_transform.translation {
                 self.last_transform = new_pose;
-                apply_offset(new_pose, monado);
+                apply_offset(new_pose, &mut monado.ipc);
             }
         } else {
             self.momentum_velocity = Vec3A::ZERO;

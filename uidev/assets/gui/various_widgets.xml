@@ -59,7 +59,11 @@
         </div>
       </rectangle>
 
-      <div>
+      <div gap="4" flex_direction="column">
+        <rectangle macro="rect">
+          <label text="Color selector!"/>
+          <ColorSelector />
+        </rectangle>
         <rectangle macro="rect">
           <label text="Context menu test" />
           <Button id="button_context_menu" text="Show context menu" />

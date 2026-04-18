@@ -81,7 +81,6 @@ impl Default for WguiWindowParamsExtra {
 
 pub struct WguiWindowParams<'a> {
 	pub position: Vec2,
-	pub globals: &'a WguiGlobals,
 	pub layout: &'a mut Layout,
 	pub extra: WguiWindowParamsExtra,
 }
@@ -100,7 +99,7 @@ impl WguiWindow {
 		self.0.borrow_mut().opened_window = None;
 	}
 
-	pub fn open(&mut self, params: &mut WguiWindowParams) -> anyhow::Result<()> {
+	pub fn open(&self, params: &mut WguiWindowParams) -> anyhow::Result<()> {
 		// close previous one if it's already open
 		self.close();
 
@@ -216,12 +215,14 @@ impl WguiWindow {
 			},
 		)?;
 
+		let globals = params.layout.state.globals.clone();
+
 		let content_id = if params.extra.with_decorations {
 			let xml_path: AssetPath = AssetPath::WguiInternal("wgui/window_frame.xml");
 
 			let state = parser::parse_from_assets(
 				&parser::ParseDocumentParams {
-					globals: params.globals.clone(),
+					globals: globals.clone(),
 					path: xml_path,
 					extra: Default::default(),
 				},
@@ -240,7 +241,7 @@ impl WguiWindow {
 
 			if let Some(title) = &params.extra.title {
 				let mut text_title = state.fetch_widget_as::<WidgetLabel>(&params.layout.state, "text_window_title")?;
-				text_title.set_text_simple(&mut params.globals.get(), title.clone());
+				text_title.set_text_simple(&mut globals.get(), title.clone());
 			}
 			let content = state.fetch_widget(&params.layout.state, "content")?;
 

@@ -123,20 +123,30 @@ impl ComponentTrait for ComponentButton {
 	fn refresh(&self, data: &mut RefreshData) {
 		let mut state = self.state.borrow_mut();
 
+		// FIXME: refactor this after merging feat-skybox-catalog branch
+		let mut lc = data.layout.start_common();
+
 		if state.active_tooltip.is_some() {
-			if let Some(node_id) = data.common.state.nodes.get(self.base.get_id()) {
-				if !widget::is_node_visible(&data.common.state.tree, *node_id) {
+			let common = lc.common();
+			if let Some(node_id) = common.state.nodes.get(self.base.get_id()) {
+				if !widget::is_node_visible(&common.state.tree, *node_id) {
 					state.active_tooltip = None; // destroy the tooltip, this button is now hidden
 				}
 			} else {
 				debug_assert!(false);
 			}
 		}
+
+		let _ = lc.finish();
 	}
 }
 
 fn get_color2(color: &drawing::Color, gradient_intensity: f32) -> drawing::Color {
 	color.lerp(&Color::new(0.0, 0.0, 0.0, color.a), gradient_intensity)
+}
+
+fn get_hover_color(color: &drawing::Color) -> drawing::Color {
+	Color::new(color.r + 0.25, color.g + 0.25, color.g + 0.25, color.a + 0.15)
 }
 
 impl ComponentButton {
@@ -165,7 +175,7 @@ impl ComponentButton {
 
 		let mut state = self.state.borrow_mut();
 		state.colors.color = color;
-
+		state.colors.hover_color = get_hover_color(&color);
 		rect.params.color = color;
 		rect.params.color2 = get_color2(&color, gradient_intensity);
 	}
@@ -227,6 +237,7 @@ impl ComponentButton {
 	}
 }
 
+#[allow(clippy::too_many_arguments)]
 fn anim_hover(
 	common: &mut CallbackDataCommon,
 	rect: &mut WidgetRectangle,
@@ -428,29 +439,17 @@ pub fn construct(ess: &mut ConstructEssentials, params: Params) -> anyhow::Resul
 	style.overflow.y = taffy::Overflow::Hidden;
 
 	// update colors to default ones if they are not specified
-	let color = if let Some(color) = params.color {
-		color
-	} else {
-		theme.button_color
-	};
+	let color = params.color.unwrap_or(theme.button_color);
 
-	let border_color = if let Some(border_color) = params.border_color {
-		border_color
-	} else {
-		Color::new(color.r, color.g, color.b, color.a + 0.25)
-	};
+	let border_color = params
+		.border_color
+		.unwrap_or_else(|| Color::new(color.r, color.g, color.b, color.a + 0.25));
 
-	let hover_color = if let Some(hover_color) = params.hover_color {
-		hover_color
-	} else {
-		Color::new(color.r + 0.25, color.g + 0.25, color.g + 0.25, color.a + 0.15)
-	};
+	let hover_color = params.hover_color.unwrap_or_else(|| get_hover_color(&color));
 
-	let hover_border_color = if let Some(hover_border_color) = params.hover_border_color {
-		hover_border_color
-	} else {
-		Color::new(color.r + 0.5, color.g + 0.5, color.g + 0.5, color.a + 0.5)
-	};
+	let hover_border_color = params
+		.hover_border_color
+		.unwrap_or_else(|| Color::new(color.r + 0.5, color.g + 0.5, color.g + 0.5, color.a + 0.5));
 
 	let gradient_intensity = theme.gradient_intensity;
 

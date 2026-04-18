@@ -5,9 +5,13 @@ use idmap::IdMap;
 use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, EnumProperty, EnumString, VariantArray};
 use wayvr_ipc::packet_client::WvrProcessLaunchParams;
+use wgui::drawing::{self, HsvColor};
 
 use crate::{
-	astr_containers::{AStrMap, AStrSet}, locale::{self}, overlays::{BackendAttribValue, ToastDisplayMethod, ToastTopic}, windowing::OverlayWindowState
+	astr_containers::{AStrMap, AStrSet},
+	locale::{self},
+	overlays::{BackendAttribValue, ToastDisplayMethod, ToastTopic},
+	windowing::OverlayWindowState,
 };
 
 pub type PwTokenMap = AStrMap<String>;
@@ -61,6 +65,57 @@ pub enum HandsfreePointer {
 	EyeTracking,
 	#[strum(props(Translation = "APP_SETTINGS.OPTION.EYE_ONLY"))]
 	EyeTrackingOnly,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ChromaKeyParams {
+	pub hsv_min: [f32; 3],
+	pub hsv_max: [f32; 3],
+	pub curve: f32,
+	pub despill: f32,
+}
+
+fn hsv_green() -> [f32; 3] {
+	[2.0 / 6.0, 1.0, 1.0]
+}
+
+impl Default for ChromaKeyParams {
+	fn default() -> Self {
+		Self {
+			hsv_min: hsv_green(),
+			hsv_max: hsv_green(),
+			curve: 0.0, // Monado will ignore chroma keying completely if this value is zero
+			despill: 0.0,
+		}
+	}
+}
+
+impl ChromaKeyParams {
+	pub fn update_hsv_range_from_rgb(&mut self, rgb_color: drawing::Color, range_h: f32, range_s: f32, range_v: f32) {
+		let hsv = HsvColor::from(rgb_color);
+		self.hsv_min[0] = hsv.h - range_h / 2.0;
+		self.hsv_min[1] = hsv.s - range_s / 2.0;
+		self.hsv_min[2] = hsv.v - range_v / 2.0;
+		self.hsv_max[0] = hsv.h + range_h / 2.0;
+		self.hsv_max[1] = hsv.s + range_s / 2.0;
+		self.hsv_max[2] = hsv.v + range_v / 2.0;
+	}
+
+	// Inverse of `update_hsv_range_from_rgb` function
+	pub fn get_rgb_and_hsv_ranges(&self) -> (drawing::Color, f32, f32, f32) {
+		(
+			HsvColor::new(
+				(self.hsv_min[0] + self.hsv_max[0]) / 2.0,
+				(self.hsv_min[1] + self.hsv_max[1]) / 2.0,
+				(self.hsv_min[2] + self.hsv_max[2]) / 2.0,
+				1.0,
+			)
+			.to_rgb(),
+			self.hsv_max[0] - self.hsv_min[0],
+			self.hsv_max[1] - self.hsv_min[1],
+			self.hsv_max[2] - self.hsv_min[2],
+		)
+	}
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -137,8 +192,6 @@ fn def_theme_path() -> Arc<str> {
 const fn def_max_height() -> u16 {
 	1440
 }
-
-
 
 #[derive(Deserialize, Serialize)]
 pub struct GeneralConfig {
@@ -330,4 +383,10 @@ pub struct GeneralConfig {
 
 	#[serde(default = "def_one")]
 	pub grid_opacity: f32,
+
+	#[serde(default = "def_false")]
+	pub keyboard_swipe_to_type_enabled: bool,
+
+	#[serde(default)]
+	pub chroma_key_params: ChromaKeyParams,
 }

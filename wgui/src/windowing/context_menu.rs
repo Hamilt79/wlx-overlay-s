@@ -13,6 +13,7 @@ use crate::{
 	windowing::window::{WguiWindow, WguiWindowParams, WguiWindowParamsExtra},
 };
 
+#[derive(Clone)]
 pub struct Cell {
 	pub title: Translation,
 	pub tooltip: Option<Translation>,
@@ -93,7 +94,6 @@ impl ContextMenu {
 		let globals = layout.state.globals.clone();
 
 		self.window.open(&mut WguiWindowParams {
-			globals: &globals,
 			layout,
 			position: params.position,
 			extra: WguiWindowParamsExtra {
@@ -117,7 +117,7 @@ impl ContextMenu {
 				par.insert(Rc::from("tooltip_str"), tooltip.generate(&mut globals.i18n()));
 			}
 
-			let mut data_cell = inner_parser.parse_template(&doc_params, "Cell", layout, id_buttons, par)?;
+			let mut data_cell = inner_parser.realize_template(&doc_params, "Cell", layout, id_buttons, par)?;
 
 			let button = data_cell.fetch_component_as::<ComponentButton>("button")?;
 			let button_id = button.base().get_id();
@@ -136,7 +136,7 @@ impl ContextMenu {
 			}
 
 			if idx < cells.len() - 1 {
-				inner_parser.parse_template(&doc_params, "Separator", layout, id_buttons, Default::default())?;
+				inner_parser.realize_template(&doc_params, "Separator", layout, id_buttons, Default::default())?;
 			}
 		}
 		Ok(())
