@@ -129,6 +129,11 @@ impl EventAlterables {
 		self.dirty_widgets.push(widget_id);
 	}
 
+	pub fn mark_dirty_and_redraw(&mut self, widget_id: WidgetID) {
+		self.mark_dirty(widget_id);
+		self.mark_redraw();
+	}
+
 	pub fn mark_tick(&mut self, widget_id: WidgetID) {
 		self.widgets_to_tick.insert(widget_id);
 	}
@@ -174,8 +179,7 @@ impl CallbackDataCommon<'_> {
 
 	// helper functions
 	pub fn mark_widget_dirty(&mut self, id: WidgetID) {
-		self.alterables.mark_dirty(id);
-		self.alterables.mark_redraw();
+		self.alterables.mark_dirty_and_redraw(id);
 	}
 
 	pub fn globals(&self) -> RefMut<'_, globals::Globals> {
@@ -214,10 +218,6 @@ impl CallbackMetadata {
 	pub fn get_mouse_pos_relative(&self, transform_stack: &TransformStack) -> Option<Vec2> {
 		let mouse_pos_abs = self.get_mouse_pos_absolute()?;
 		Some(mouse_pos_abs - transform_stack.get().abs_pos)
-	}
-	pub fn get_mouse_pos_normalized(&self, transform_stack: &TransformStack) -> Option<Vec2> {
-		let pos_relative = self.get_mouse_pos_relative(transform_stack)?;
-		Some(pos_relative / transform_stack.parent().raw_dim)
 	}
 }
 

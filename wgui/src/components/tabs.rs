@@ -9,7 +9,7 @@ use crate::{
 	layout::WidgetPair,
 	widget::{ConstructEssentials, div::WidgetDiv},
 };
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, fmt::Pointer, rc::Rc};
 use taffy::{
 	AlignItems,
 	prelude::{length, percent},
@@ -93,6 +93,16 @@ impl State {
 impl ComponentTabs {
 	pub fn on_select(&self, callback: TabSelectCallback) {
 		self.state.borrow_mut().on_select = Some(callback);
+	}
+
+	pub fn get_tab_button(&self, name: &str) -> Option<Rc<ComponentButton>> {
+		self
+			.state
+			.borrow_mut()
+			.mounted_entries
+			.iter()
+			.find(|e| name == &*e.name)
+			.map(|e| e.button.clone())
 	}
 }
 
