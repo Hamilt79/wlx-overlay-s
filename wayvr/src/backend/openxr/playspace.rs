@@ -26,7 +26,6 @@ struct RotateData {
 
 pub(super) struct PlayspaceMover {
     last_transform: Affine3A,
-    floor_offset: f32,
     space_fling_enabled: bool,
     momentum_velocity: Vec3A,
     drag: Option<MoverData<Vec3A>>,
@@ -49,7 +48,6 @@ impl PlayspaceMover {
 
         Ok(Self {
             last_transform,
-            floor_offset: 0.0,
             space_fling_enabled: false,
             momentum_velocity: Vec3A::ZERO,
             drag: None,
