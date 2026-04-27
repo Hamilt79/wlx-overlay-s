@@ -19,10 +19,19 @@ struct MoverData<T> {
     hand_pose: T,
 }
 
+struct RotateData {
+    initial_pose: Affine3A,
+    pending_pose: Affine3A,
+    previous_pose: Affine3A,
+    hand: usize,
+    initial_hand_pose: Quat,
+    initial_pivot: Vec3A,
+}
+
 pub(super) struct PlayspaceMover {
     universe: ETrackingUniverseOrigin,
     drag: Option<MoverData<Vec3A>>,
-    rotate: Option<MoverData<Quat>>,
+    rotate: Option<RotateData>,
     space_fling_enabled: bool,
     momentum_velocity: Vec3A,
 }
@@ -74,28 +83,29 @@ impl PlayspaceMover {
                 return;
             }
 
-            let new_hand =
-                Quat::from_affine3(&(data.pose * app.input_state.pointers[data.hand].raw_pose));
+            let new_hand = Quat::from_affine3(&device_pose_to_raw(
+                &universe,
+                &data.pending_pose,
+                &pointer.pose,
+            ))
+            .normalize();
+            let mut delta = (new_hand * data.initial_hand_pose.conjugate()).normalize();
+            if delta.w < 0.0 {
+                delta = -delta;
+            }
 
-            let dq = new_hand * data.hand_pose.conjugate();
-            let rel_y = f32::atan2(
-                2.0 * dq.y.mul_add(dq.w, dq.x * dq.z),
-                2.0f32.mul_add(dq.w.mul_add(dq.w, dq.x * dq.x), -1.0),
-            );
+            let mut space_transform = Affine3A::from_quat(delta);
+            space_transform.translation =
+                data.initial_pivot - space_transform.transform_point3a(data.initial_pivot);
 
-            let mut space_transform = Affine3A::from_rotation_y(rel_y);
-            let offset = (space_transform.transform_vector3a(app.input_state.hmd.translation)
-                - app.input_state.hmd.translation)
-                * -1.0;
-            space_transform.translation = offset;
-
-            data.pose *= space_transform;
-            data.hand_pose = new_hand;
+            data.pending_pose = space_transform * data.initial_pose;
 
             if self.universe == ETrackingUniverseOrigin::TrackingUniverseStanding {
-                apply_chaperone_transform(space_transform.inverse(), chaperone_mgr);
+                let pose_delta = data.previous_pose.inverse() * data.pending_pose;
+                apply_chaperone_transform(pose_delta.inverse(), chaperone_mgr);
             }
-            set_working_copy(&universe, chaperone_mgr, &data.pose);
+            data.previous_pose = data.pending_pose;
+            set_working_copy(&universe, chaperone_mgr, &data.pending_pose);
             chaperone_mgr.commit_working_copy(EChaperoneConfigFile::EChaperoneConfigFile_Live);
         } else {
             for (i, pointer) in app.input_state.pointers.iter().enumerate() {
@@ -104,11 +114,18 @@ impl PlayspaceMover {
                         log::warn!("Can't space rotate - failed to get zero pose");
                         return;
                     };
-                    let hand_pose = Quat::from_affine3(&(mat * pointer.raw_pose));
-                    self.rotate = Some(MoverData {
-                        pose: mat,
+                    let hand_pose =
+                        Quat::from_affine3(&device_pose_to_raw(&universe, &mat, &pointer.pose))
+                            .normalize();
+                    let pivot =
+                        device_pose_to_raw(&universe, &mat, &app.input_state.hmd).translation;
+                    self.rotate = Some(RotateData {
+                        initial_pose: mat,
+                        pending_pose: mat,
+                        previous_pose: mat,
                         hand: i,
-                        hand_pose,
+                        initial_hand_pose: hand_pose,
+                        initial_pivot: pivot,
                     });
                     self.drag = None;
                     log::info!("Start space rotate");
@@ -186,8 +203,7 @@ impl PlayspaceMover {
             }
         }
 
-        app
-            .input_state
+        app.input_state
             .pointers
             .iter()
             .any(|p| p.now.space_fling && !p.before.space_fling)
@@ -360,6 +376,18 @@ fn set_working_copy(
             chaperone_mgr.set_working_standing_zero_pose_to_raw_tracking_pose(&mat);
         }
         _ => chaperone_mgr.set_working_seated_zero_pose_to_raw_tracking_pose(&mat),
+    }
+}
+
+fn device_pose_to_raw(
+    universe: &ETrackingUniverseOrigin,
+    zero_to_raw: &Affine3A,
+    device_pose: &Affine3A,
+) -> Affine3A {
+    if *universe == ETrackingUniverseOrigin::TrackingUniverseRawAndUncalibrated {
+        *device_pose
+    } else {
+        *zero_to_raw * *device_pose
     }
 }
 
