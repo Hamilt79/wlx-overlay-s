@@ -100,7 +100,7 @@ impl AppState {
     pub fn from_graphics(
         gfx: Arc<WGfx>,
         gfx_extras: WGfxExtras,
-        feats: InterfaceFeats,
+        mut feats: InterfaceFeats,
     ) -> anyhow::Result<Self> {
         // insert shared resources
         let mut tasks = TaskContainer::new();
@@ -194,6 +194,11 @@ impl AppState {
 
         let executor = wlx_common::async_executor::create_local();
 
+        #[cfg(feature = "whisper")]
+        {
+            feats.whisper = true;
+        }
+
         let mut app_state = Self {
             tasks,
             gfx,
@@ -211,7 +216,7 @@ impl AppState {
                 &lang_provider,
                 &WguiFontConfig::default(),
                 get_config_file_path(&theme_path),
-                load_palette(&*session.config.color_palette),
+                load_palette(&session.config.color_palette),
             )?,
             wgui_theme: Rc::new(theme),
             executor,
