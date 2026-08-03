@@ -196,39 +196,42 @@ function gen_prompt(
 	english_translation: string,
 	context: string,
 ) {
-	let num = 1;
-	for (const example of template.examples) {
-		description += "\nExample " + num + ":\n\n";
+	for (let num = 1; num <= template.examples.length; num++) {
+		const example = template.examples[num - 1]!;
 		description +=
-			"Translate key `" +
-			example.key +
-			"` from English to " +
-			template.full_name +
-			":\n\n";
-		description += "```\n";
-		description += example.en + "\n";
-		description += "```\n\n";
-		description += "Result:\n\n";
-		description += "```\n";
-		description += example.translated + "\n";
-		description += "```\n";
-		num += 1;
+			`\nExample ${num}:\n\n` +
+			`Translate key \`${example.key}\` from English to ${template.full_name}:\n\n` +
+			"```\n" +
+			example.en +
+			"\n```\n\n" +
+			"Result:\n\n```\n" +
+			example.translated +
+			"\n```\n";
 	}
-	description += "\nEnd of examples.\n\n";
-	description += "Context: " + context + "\n\n";
 	description +=
-		"Translate key `" +
-		key +
-		"` from English to " +
-		template.full_name +
-		":\n\n";
-	description += "```\n";
-	description += english_translation + "\n";
-	description += "```\n";
+		`\nEnd of examples.\n\n` +
+		`Context: ${context}\n\n` +
+		`Translate key \`${key}\` from English to ${template.full_name}:\n\n` +
+		"```\n" +
+		english_translation +
+		"\n```\n";
 	return description;
 }
 
 async function run() {
+	const csv_text = (await fsp.readFile(lang_path + "/en.csv", "utf-8")) as any;
+	const csv_entries = parse_csv(csv_text);
+	const orig_english_json = csv_to_json(csv_entries);
+
+	if (template_name === "en") {
+		await fsp.writeFile(
+			lang_path + "/en.json",
+			JSON.stringify(orig_english_json, undefined, "\t"),
+		);
+		console.log("Translation en copied");
+		return;
+	}
+
 	const template = JSON.parse(
 		await fsp.readFile(templates_path + "/" + template_name + ".json", "utf-8"),
 	) as Template;
@@ -242,41 +245,14 @@ async function run() {
 		template.full_name,
 	);
 
-	const csv_text = (await fsp.readFile(lang_path + "/en.csv", "utf-8")) as any;
-	const csv_entries = parse_csv(csv_text);
-	const orig_english_json = csv_to_json(csv_entries);
-
 	let llm_translated_json: any = {};
 	const translated_json_path = lang_path + "/" + template_name + ".json";
-	if (await fsp.exists(translated_json_path)) {
+	try {
 		console.log("Loading file", translated_json_path);
 		llm_translated_json = JSON.parse(
 			(await fsp.readFile(translated_json_path)).toString(),
 		);
-	}
-
-	if (template_name === "en") {
-		await fsp.writeFile(
-			lang_path + "/en.json",
-			JSON.stringify(orig_english_json, undefined, "\t"),
-		);
-		console.log("Translation en finished");
-		return;
-	}
-
-	let orig_translated_json = {};
-	try {
-		orig_translated_json = JSON.parse(
-			(
-				await fsp.readFile(lang_path + "/" + template_name + ".json")
-			).toString(),
-		);
 	} catch (_e) {}
-
-	let total_count = 0;
-	for (const _entry of csv_entries) {
-		total_count += 1;
-	}
 
 	await loop_object(llm_translated_json, "", async (key, _) => {
 		if (!key_exists(orig_english_json, key)) {
@@ -293,10 +269,6 @@ async function run() {
 		const key = entry.key;
 		const english_translation = entry.english;
 		const context = entry.context;
-
-		if (key_exists(orig_translated_json, key)) {
-			continue;
-		}
 
 		if (key_exists(llm_translated_json, key)) {
 			continue;

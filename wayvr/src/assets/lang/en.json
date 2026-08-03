@@ -1,17 +1,63 @@
 {
-	"EDIT_MODE": {
-		"STEREO_3D_MODE": {
-			"ADJUST_MOUSE": "Adjust mouse",
-			"FULL_FRAME": "Full 3D",
-			"FULL_FRAME_BAT": "Full-BAT",
-			"FULL_FRAME_SBS": "Full-SBS",
-			"FULL_FRAME_TAB": "Full-TAB",
-			"SPLIT_BOTTOM_TOP": "BOTTOM→TOP",
-			"SPLIT_LEFT_RIGHT": "LEFT→RIGHT",
-			"SPLIT_RIGHT_LEFT": "RIGHT→LEFT",
-			"SPLIT_TOP_BOTTOM": "TOP→BOTTOM",
-			"TITLE": "3D Stereo Mode"
+	"DEFINITIONS": {
+		"ANCHORED": "Anchored",
+		"FLOATING": "Floating",
+		"STATIC": "Static",
+		"SET": "Set",
+		"WATCH": "Watch",
+		"DASHBOARD": "Dashboard",
+		"EDIT_MODE": "Edit Mode",
+		"MIRROR": "Mirror",
+		"SETTINGS": "Settings",
+		"KEYBOARD": "Keyboard",
+		"TASKBAR": "Taskbar",
+		"FEATURES": "Features",
+		"OVERLAY": "Overlay"
+	},
+	"ANCHOR": {
+		"CENTER": "Center"
+	},
+	"BAR": {
+		"ADD_MIRROR": "Add a new mirror overlay",
+		"ADD_NEW_SET": "Add new set",
+		"ADD_PASSTHRU": "Add new pass-through cutout",
+		"CLOSE_APP": "Close app",
+		"CLOSE_OVERLAY": "Close overlay",
+		"DELETE_CURRENT_SET": "Delete current set",
+		"EDIT_MODE_TOGGLE": "Toggle edit mode",
+		"FORCE_CLOSE_APP": "Force close app",
+		"HANDSFREE": {
+			"EYE_ONLY": "Eye laser",
+			"EYE_TRACKING": "Eye + pinch",
+			"HMD": "HMD + pinch",
+			"HMD_ONLY": "HMD laser",
+			"NONE": "Off",
+			"TITLE": "Hands-free mode"
 		},
+		"RELOAD_FROM_DISK": "Reload XML from disk",
+		"RESET_POSITION": "Reset position",
+		"TOGGLE_VISIBILITY": "Toggle visibility"
+	},
+	"DEFAULT": "Default",
+	"DISABLED": "Disabled",
+	"DONE": "Done",
+	"EDIT_MODE": {
+		"ADJUST_CURVATURE": "Adjust curvature",
+		"ALIGN_TO_HMD": "Align to HMD",
+		"ALPHA_BLEND_MODE": "Alpha blend mode",
+		"ANGLE_FADE": "Angle fade",
+		"ANGLE_FADE_HELP": "Fade when not facing HMD",
+		"BLENDING_ADDITIVE": "Additive blending",
+		"BLOCK_INPUT": "Block game input",
+		"CURVATURE": "Curvature",
+		"DELETE": "Long press to remove from current set",
+		"DISABLE_GRAB": "Disable grab",
+		"GLOBAL": "Always visible",
+		"HINT_POINT_WINDOW": "Point at a window to change its parameters.\nOnce done, leave edit mode using the button on the right.",
+		"INTERPOLATION": "Interpolation",
+		"KEYBOARD": "Keyboard",
+		"LEAVE": "Leave edit mode",
+		"LOCK_INTERACTION": "Lock interaction",
 		"MOUSE": {
 			"FLIP180": "Flipped 180°",
 			"FLIP270": "Flipped 270°",
@@ -23,6 +69,29 @@
 			"ROTATE90": "Rotated 90°",
 			"TITLE": "Mouse fixes",
 			"WRONG_SCREEN_SELECTION_HELP": "If the cursor moves on a completely different screen,\nthe screens were likely selected wrong. See readme."
+		},
+		"MOVE_PRESS_AND_DRAG": "Move (press & drag)",
+		"OPACITY": "Opacity",
+		"POS_ANCHORED": "Anchored: Moves together with set. Default.",
+		"POS_FLOATING": "Floating: Moves independently, recenters when shown.",
+		"POS_HAND_L": "Follow the left hand.",
+		"POS_HAND_R": "Follow the right hand.",
+		"POS_HMD": "Follow the HMD.",
+		"POS_STATIC": "Static: Not part of any set, no recenter.",
+		"POSITIONING": "Positioning",
+		"RESIZE_PRESS_AND_DRAG": "Resize (press & drag)",
+		"RESIZE_CORNER": "Drag to resize",
+		"STEREO_3D_MODE": {
+			"ADJUST_MOUSE": "Adjust mouse",
+			"FULL_FRAME": "Full 3D",
+			"FULL_FRAME_BAT": "Full-BAT",
+			"FULL_FRAME_SBS": "Full-SBS",
+			"FULL_FRAME_TAB": "Full-TAB",
+			"SPLIT_BOTTOM_TOP": "BOTTOM→TOP",
+			"SPLIT_LEFT_RIGHT": "LEFT→RIGHT",
+			"SPLIT_RIGHT_LEFT": "RIGHT→LEFT",
+			"SPLIT_TOP_BOTTOM": "TOP→BOTTOM",
+			"TITLE": "3D Stereo Mode"
 		}
 	},
 	"ALTTAB": {
@@ -33,7 +102,6 @@
 		"GRAB": "Move individual overlay",
 		"DASH": "Toggle dashboard",
 		"EDIT": "Toggle edit mode",
-		"KEYBOARD": "Toggle keyboard",
 		"SET": "Switch set",
 		"RECENTER": "Show/hide/recenter",
 		"GENERAL_BINDS": "General bindings",
@@ -45,7 +113,7 @@
 	"GRAB": {
 		"ADJUST_DISTANCE": "Adjust distance",
 		"ADJUST_SIZE": "Adjust size",
-		"GRABBING_ANCHORED": "Anchored overlays all move together. Separate a single window by grabbing it with the other hand while still grabbing the anchor.",
+		"GRABBING_ANCHORED": "Anchored overlays move with the set. Separate a single window by grabbing it with the other hand while still grabbing the set.",
 		"GRABBING_ANCHORED_EDIT": "This overlay will stay anchored to the center marker.",
 		"GRABBING_FLOATING": "This overlay is Floating and will stay in place, unless recentered.",
 		"GRABBING_FOLLOW": "This overlay will follow the device it is attached to.",
@@ -71,17 +139,16 @@
 		"LAST_EXISTING_SET": "This is the last existing set.",
 		"LETS_ADD_OVERLAYS": "Let's add some overlays from the taskbar!",
 		"MAXIMUM_SETS_REACHED": "Maximum number of sets reached.",
+		"NO_KEYMAPS_CONFIGURED": "No keyboard layouts configured",
+		"NO_KEYMAPS_CONFIGURED_HELP": "Check the wayvr.org on how to set up your keyboard layouts!",
 		"NO_SET_SELECTED": "No set is selected.",
-		"ONE_CONTROLLER_ON_FLOOR": "Place one controller on the floor!",
-		"NO_KEYMAPS_CONFIGURED": "No keymaps configured.",
-		"NO_KEYMAPS_CONFIGURED_HELP": "Check the wayvr.org on how to set up your keymaps!"
+		"ONE_CONTROLLER_ON_FLOOR": "Place one controller on the floor!"
 	},
 	"WATCH": {
 		"ADD_NEW_SET": "Add a new set",
 		"CLEANUP_MIRRORS": "Remove mirrors that are\nnot currently visible",
 		"DASHBOARD": "Dashboard",
 		"EDIT_MODE": "Edit Mode",
-		"EDIT_MODE_EXPLANATION": "Overlays can now be moved and tuned individually.\nControl which overlays are visible on this set:",
 		"FIX_FLOOR": "Fix floor level",
 		"LONG_PRESS_TO_DELETE_SET": "Hold to delete",
 		"RECENTER": "Recenter playspace",
@@ -99,20 +166,5 @@
 		"INITIAL_TEXT": "Press and hold the mic button to start transcribing...",
 		"INIT_ERROR": "Error while starting Whisper engine",
 		"ENTER_KEY": "Enter key"
-	},
-	"DEFINITIONS": {
-		"ANCHORED": "Anchored",
-		"FLOATING": "Floating",
-		"STATIC": "Static",
-		"SET": "Set",
-		"WATCH": "Watch",
-		"DASHBOARD": "Dashboard",
-		"EDIT_MODE": "Edit Mode",
-		"MIRROR": "Mirror",
-		"SETTINGS": "Settings",
-		"KEYBOARD": "Keyboard",
-		"TASKBAR": "Taskbar",
-		"FEATURES": "Features",
-		"OVERLAY": "Overlay"
 	}
 }

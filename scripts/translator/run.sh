@@ -25,6 +25,7 @@ if [ -z "${LLAMA_BASE_URL}" ]; then
 	export LLAMA_BASE_URL="http://127.0.0.1:8080"
 fi
 
+TEMPLATE="en" bun main.ts
 TEMPLATE="pl" bun main.ts
 TEMPLATE="de" bun main.ts
 TEMPLATE="ja" bun main.ts
