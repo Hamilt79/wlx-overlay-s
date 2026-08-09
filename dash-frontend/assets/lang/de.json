@@ -271,7 +271,10 @@
 		"DESCRIPTION": "Wir sind ein kleines Team aus 2 Entwicklern, die WayVR in ihrer Freizeit bauen. Wenn dir die Software gefällt, unterstütze uns bitte – jede Spende hilft uns dabei, weiterzumachen.",
 		"THANK_YOU_WAYVR": "Danke vom WayVR-Team!",
 		"BUTTON_TOOLTIP": "Via Open Collective spenden",
-		"CURRENT_SUPPORTERS": "Aktuelle Unterstützer"
+		"CURRENT_SUPPORTERS": "Aktuelle Unterstützer",
+		"BROUGHT_TO_YOU_VARIANTS_OFTEN": "Unterstützt von {USER}|Besonderer Dank an {USER}|Gesponsert von {USER}|Ermöglicht durch {USER}|Getragen von Community-Mitgliedern wie {USER}|Mit Hilfe von {USER}|Aufrechterhalten durch {USER}|Ein Beitrag von {USER}|Finanziert durch {USER}",
+		"BROUGHT_TO_YOU_VARIANTS_RARE": "Kaffee spendiert von {USER}|Angetrieben von {USER}|Ein großes Shoutout an {USER}!|{USER} hält uns am Laufen|Mit {USER} wachsen wir weiter|{USER} hält die Server stabil|In voller Dankbarkeit gegenüber {USER}|Power-up durch {USER}|Unterstützt von Freunden wie {USER}",
+		"BROUGHT_TO_YOU_VARIANTS_VERY_RARE": "Unterstützt von Legenden wie {USER}|Koffein-Zufuhr gesichert durch {USER}|Eine echte Legende: {USER}|Unser Held des Tages: {USER}|Ein absoluter Superstar: {USER}|Bezahlt gerade die Stromrechnung: {USER}|Der Retter unserer Nerven: {USER}|Der Ruhepol im Chaos: {USER}|Kaffee-zu-Code-Konverter: {USER}|Hält die Production stabil: {USER}|Die eine und einzige(r): {USER}|Bezwinger des dmabuf-Buffers: {USER}"
 	},
 	"DOWNLOAD": "Herunterladen",
 	"DOWNLOADER": "Downloader",

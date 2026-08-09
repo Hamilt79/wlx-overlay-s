@@ -271,7 +271,10 @@
 		"DESCRIPTION": "我们是由两名开发者组成的小团队，在业余时间构建 WayVR。如果你喜欢这款软件，请考虑支持我们 —— 每一份捐赠都能帮助我们坚持下去。",
 		"THANK_YOU_WAYVR": "WayVR 团队向您致谢！",
 		"BUTTON_TOOLTIP": "通过 Open Collective 捐赠",
-		"CURRENT_SUPPORTERS": "当前支持者"
+		"CURRENT_SUPPORTERS": "当前支持者",
+		"BROUGHT_TO_YOU_VARIANTS_OFTEN": "由 {USER} 赞助|感谢 {USER} 的支持|由 {USER} 助力|来自 {USER} 的贡献|{USER} 让这一切成为可能|由 {USER} 维持运行|特别感谢 {USER}|{USER} 给予了支持|由 {USER} 驱动",
+		"BROUGHT_TO_YOU_VARIANTS_RARE": "感谢 {USER} 的温暖支持|{USER} 为我们注入了能量|由 {USER} 助力成长|感谢 {USER} 的无私奉献|{USER} 让今天变得更美好|今日的动力源泉：{USER}|由 {USER} 悉心支持|感恩 {USER} 的陪伴|{USER} 是今天的闪光点",
+		"BROUGHT_TO_YOU_VARIANTS_VERY_RARE": "今日之神：{USER}|全场 MVP：{USER}|{USER} 拯救了世界|给 {USER} 递上一朵小红花|由 {USER} 承包了今天的快乐|{USER} 承包了今日的电费|代码之光：{USER}|{USER} 拯救了我们的发际线|简直是超级英雄：{USER}|{USER} 让生产环境稳如老狗|唯一且无可替代的：{USER}|{USER} 是今天的顶梁柱"
 	},
 	"DOWNLOAD": "下载",
 	"DOWNLOADER": "下载管理器",

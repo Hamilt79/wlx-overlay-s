@@ -271,7 +271,10 @@
 		"DESCRIPTION": "Siamo un piccolo team di 2 sviluppatori che realizza WayVR nel tempo libero. Se ti piace usare questo software, considera di supportarci: ogni donazione ci aiuta a continuare.",
 		"THANK_YOU_WAYVR": "Grazie dal team di WayVR!",
 		"BUTTON_TOOLTIP": "Donazione tramite Open Collective",
-		"CURRENT_SUPPORTERS": "Supporter attuali"
+		"CURRENT_SUPPORTERS": "Supporter attuali",
+		"BROUGHT_TO_YOU_VARIANTS_OFTEN": "Supportato da {USER}|Grazie speciali a {USER}|Sponsorizzato da {USER}|Contributo di {USER}|Sostenuto da membri come {USER}|Reso possibile da {USER}|Sostenuto da {USER}|Grazie a {USER}|Alimentato da {USER}",
+		"BROUGHT_TO_YOU_VARIANTS_RARE": "Caffè offerto da {USER}|Energia pura grazie a {USER}|Un grande applauso a {USER}!|Ci tiene in piedi: {USER}|Ci aiuta a crescere: {USER}|Mantiene i server accesi: {USER}|Con immensa gratitudine a {USER}|Spinto dalla forza di {USER}|Supportato da amici come {USER}",
+		"BROUGHT_TO_YOU_VARIANTS_VERY_RARE": "Supportato da leggende come {USER}|Caffeina fornita da {USER}|Una vera leggenda: {USER}|Il nostro eroe del giorno: {USER}|Una superstar assoluta: {USER}|Paga la bolletta della luce: {USER}|Il motore della nostra creatività: {USER}|Il navigatore del nostro percorso: {USER}|Convertitore caffeina-codice fornito da {USER}|Mantiene la produzione stabile: {USER}|L'unico e inimitabile: {USER}|Maestro dei buffer dmabuf: {USER}"
 	},
 	"DOWNLOAD": "Scarica",
 	"DOWNLOADER": "Download",

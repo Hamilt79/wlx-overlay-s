@@ -271,7 +271,10 @@
 		"DESCRIPTION": "WayVRは、2人の開発者が空き時間を利用して作っている小規模なプロジェクトです。もしこのソフトを気に入っていただけたら、ぜひサポートをお願いします。皆様の寄付が開発の大きな励みになります。",
 		"THANK_YOU_WAYVR": "WayVRチームより、感謝を込めて！",
 		"BUTTON_TOOLTIP": "Open Collectiveで寄付する",
-		"CURRENT_SUPPORTERS": "現在のサポーター"
+		"CURRENT_SUPPORTERS": "現在のサポーター",
+		"BROUGHT_TO_YOU_VARIANTS_OFTEN": "{USER}さんにサポートされています|{USER}さんに感謝！|{USER}さんのご支援で成り立っています|{USER}さんが支えてくれています|{USER}さんの後押しのおかげです|{USER}さんが後援しています|{USER}さんのご協力に感謝|{USER}さんが応援してくれています|本日のサポーターは{USER}さんです",
+		"BROUGHT_TO_YOU_VARIANTS_RARE": "{USER}さんの優しさに感謝|{USER}さんが背中を押してくれました|{USER}さんの心強いサポート|{USER}さんが彩りを添えてくれました|{USER}さんのおかげで前進しています|{USER}さんの温かいご支援|{USER}さんが笑顔を届けてくれました|{USER}さんが道を照らしてくれました|{USER}さんに心から感謝して",
+		"BROUGHT_TO_YOU_VARIANTS_VERY_RARE": "今日のMVPは{USER}さん！|{USER}さんが神降臨！|{USER}さんが限界突破させてくれた！|{USER}さんのパワーで爆走中！|救世主、現る：{USER}さん！|{USER}さんが文明を支えています|{USER}さんの情熱が燃料です！|本日のスーパーヒーロー：{USER}さん！|{USER}さんがバグをなぎ倒してくれた！|{USER}さんの応援でテンションMAX！|全宇宙から{USER}さんに拍手を！"
 	},
 	"DOWNLOAD": "ダウンロード",
 	"DOWNLOADER": "ダウンローダー",

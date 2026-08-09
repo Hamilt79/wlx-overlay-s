@@ -271,7 +271,10 @@
 		"DESCRIPTION": "Somos un pequeño equipo de 2 desarrolladores creando WayVR en nuestro tiempo libre. Si disfrutas usando este software, considera apoyarnos; cada donación nos ayuda a seguir adelante.",
 		"THANK_YOU_WAYVR": "¡Gracias del equipo de WayVR!",
 		"BUTTON_TOOLTIP": "Dona a través de Open Collective",
-		"CURRENT_SUPPORTERS": "Colaboradores actuales"
+		"CURRENT_SUPPORTERS": "Colaboradores actuales",
+		"BROUGHT_TO_YOU_VARIANTS_OFTEN": "Apoyado por {USER}|Gracias a {USER}|Con el apoyo de {USER}|Patrocinado por {USER}|Un aporte especial de {USER}|Impulsado por {USER}|Haciendo esto posible: {USER}|Sostenible gracias a {USER}|Un agradecimiento a {USER}",
+		"BROUGHT_TO_YOU_VARIANTS_RARE": "Un gran impulso de {USER}|Todo es gracias a {USER}|Con todo el cariño de {USER}|El motor de hoy: {USER}|Sumando valor con {USER}|Haciendo crecer el proyecto: {USER}|De corazón, gracias a {USER}|Con el respaldo de {USER}|La chispa del día: {USER}",
+		"BROUGHT_TO_YOU_VARIANTS_VERY_RARE": "¡Un nivel leyenda: {USER}!|Energía pura gracias a {USER}|Nuestra estrella del día: {USER}|El MVP de hoy: {USER}|Rescatando el día: {USER}|Sosteniendo la aplicación: {USER}|El combustible secreto: {USER}|Manteniendo la cordura: {USER}|Conversor de café en código: {USER}|Salvando la producción: {USER}|¡Simplemente increíble: {USER}!|El corazón de todo: {USER}"
 	},
 	"DOWNLOAD": "Descargar",
 	"DOWNLOADER": "Descargador",
