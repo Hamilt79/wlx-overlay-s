@@ -28,6 +28,7 @@ mod overlays;
 mod shaders;
 mod state;
 mod subsystem;
+mod test;
 mod windowing;
 
 use std::{

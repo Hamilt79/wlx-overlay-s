@@ -58,13 +58,14 @@ impl SettingsTab for State {
 			match task {
 				Task::WhisperDownloadClosed => {
 					if let Some(model) = self.pending_download.take()
-						&& !whisper_model_path(model.file_name).exists() {
-							// download failed, set to selection to none
-							par.general_config.whisper_model = "".into();
-							par.config_change_kind.replace(ConfigChangeKind::Other);
-							// reload the tab
-							self.parent_tasks.push(ParentTask::SetTab(TabNameEnum::Features));
-						}
+						&& !whisper_model_path(model.file_name).exists()
+					{
+						// download failed, set to selection to none
+						par.general_config.whisper_model = "".into();
+						par.config_change_kind.replace(ConfigChangeKind::Other);
+						// reload the tab
+						self.parent_tasks.push(ParentTask::SetTab(TabNameEnum::Features));
+					}
 				}
 				Task::WhisperRemoveUnused => {
 					let _ = whisper_delete_all_models().log_err("could not remove whisper models");
