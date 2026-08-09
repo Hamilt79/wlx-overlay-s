@@ -121,6 +121,14 @@ impl WidgetLabel {
 		}
 	}
 
+	fn set_color_internal(&mut self, common: &mut CallbackDataCommon, color: WguiColor, apply_to_existing_text: bool) {
+		self.params.style.color = Some(color);
+		if apply_to_existing_text {
+			self.update_attrs(&common.globals().palette);
+			common.mark_widget_dirty(self.id);
+		}
+	}
+
 	pub fn set_color(&mut self, common: &mut CallbackDataCommon, color: WguiColor, apply_to_existing_text: bool) {
 		if let Some(current_color) = &self.params.style.color
 			&& *current_color == color
@@ -128,11 +136,7 @@ impl WidgetLabel {
 			// not changed
 			return;
 		}
-		self.params.style.color = Some(color);
-		if apply_to_existing_text {
-			self.update_attrs(&common.globals().palette);
-			common.mark_widget_dirty(self.id);
-		}
+		self.set_color_internal(common, color, apply_to_existing_text);
 	}
 
 	pub const fn get_color(&self) -> WguiColor {
@@ -196,7 +200,7 @@ impl WidgetObj for WidgetLabel {
 
 	fn palette_updated(&mut self, common: &mut CallbackDataCommon) {
 		let cur_color = self.get_color();
-		self.set_color(common, cur_color, true);
+		self.set_color_internal(common, cur_color, true);
 	}
 
 	fn get_id(&self) -> WidgetID {
