@@ -12,7 +12,15 @@
       <image src_builtin="dashboard/splash.png" width="300" height="89" />
 
       <!-- supporters -->
-      <Button id="btn_supporter" width="fit_content" height="24" text=" " border="0" color="background_variant(transparent)"/>
+      <Button
+        id="btn_supporter"
+        width="fit_content"
+        height="24"
+        text=" "
+        border_color="tertiary(transparent)"
+        hover_border_color="tertiary"
+        color="background_variant(transparent)"
+        hover_color="tertiary(transparent)"/>
 
       <label id="label_hello" margin_top="24" size="32" weight="bold" color="on_background" />
 
