@@ -3,18 +3,58 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::util::{networking::http_client, steam_utils::AppID};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use strum::AsRefStr;
 use wlx_common::cache_dir;
 
 fn get_unix_timestamp() -> u64 {
 	SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, AsRefStr)]
+#[serde(rename_all = "snake_case")]
+pub enum SupporterTier {
+	Platinum,
+	Gold,
+	Silver,
+	Bronze,
+}
+
+impl SupporterTier {
+	pub fn pretty_str(self) -> String {
+		format!("{self:?} Tier")
+	}
+
+	pub const fn color_str(self) -> &'static str {
+		match self {
+			Self::Platinum => "#aaffff",
+			Self::Gold => "#ffffaa",
+			Self::Silver => "#cccccc",
+			Self::Bronze => "#ffaa66",
+		}
+	}
+
+	pub const fn tickets(self) -> u32 {
+		match self {
+			Self::Platinum => 20,
+			Self::Gold => 10,
+			Self::Silver => 5,
+			Self::Bronze => 1,
+		}
+	}
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Supporter {
 	pub username: String,
 	pub date: String,
-	pub tier: String,
+	pub tier: SupporterTier,
 	pub contribution_count: u32,
+}
+
+impl Supporter {
+	pub const fn tickets(&self) -> u32 {
+		self.tier.tickets()
+	}
 }
 
 #[derive(Serialize, Deserialize)]
