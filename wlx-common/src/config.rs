@@ -25,11 +25,7 @@ pub enum CaptureMethod {
 	Auto,
 
 	#[serde(alias = "pipewire")]
-	#[strum(props(
-		Text = "PipeWire GPU",
-		Tooltip = "APP_SETTINGS.OPTION.PIPEWIRE_HELP",
-		Desktop = "Wayland"
-	))]
+	#[strum(props(Text = "PipeWire GPU", Tooltip = "APP_SETTINGS.OPTION.PIPEWIRE_HELP"))]
 	PipeWire,
 
 	#[strum(props(
@@ -40,11 +36,7 @@ pub enum CaptureMethod {
 	ScreenCopyGpu,
 
 	#[serde(alias = "pw-fallback")]
-	#[strum(props(
-		Text = "PipeWire CPU",
-		Tooltip = "APP_SETTINGS.OPTION.PW_FALLBACK_HELP",
-		Desktop = "Wayland"
-	))]
+	#[strum(props(Text = "PipeWire CPU", Tooltip = "APP_SETTINGS.OPTION.PW_FALLBACK_HELP"))]
 	PipeWireCpu,
 
 	#[serde(alias = "screencopy")]

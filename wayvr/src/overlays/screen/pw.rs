@@ -18,6 +18,9 @@ use wlx_capture::{
 };
 use wlx_common::{astr_containers::AStrMapExt, overlays::ToastTopic};
 
+#[cfg(feature = "x11")]
+use wlx_capture::xshm::XshmScreen;
+
 use crate::{
     backend::task::{OverlayTask, TaskType},
     gui::panel::{GuiPanel, NewGuiPanelParams},
@@ -107,6 +110,51 @@ impl ScreenCastBackend {
             .into(),
             vec2(output.logical_pos.0 as f32, output.logical_pos.1 as f32),
             vec2(output.logical_size.0 as f32, output.logical_size.1 as f32),
+            params,
+            app,
+            finalize_fn,
+        )
+    }
+    #[cfg(feature = "x11")]
+    pub fn new_x11pw(
+        m: &XshmScreen,
+        token: Option<Rc<str>>,
+        app: &mut AppState,
+    ) -> anyhow::Result<Self> {
+        use glam::vec2;
+
+        fn finalize_fn(
+            name: Arc<str>,
+            logical_pos: Vec2,
+            logical_size: Vec2,
+            capture: Box<dyn WlxCapture<WlxCaptureIn, WlxCaptureOut>>,
+            app: &mut AppState,
+        ) -> Box<dyn OverlayBackend> {
+            use wlx_capture::frame::Transform;
+
+            let mut backend =
+                ScreenBackend::new_raw(name, app.feats.xr_backend, CaptureType::PipeWire, capture);
+
+            backend.logical_pos = logical_pos;
+            backend.logical_size = logical_size;
+            backend.apply_mouse_transform_with_override(Transform::Undefined);
+
+            Box::new(backend)
+        }
+
+        let params = ScreenCastParams {
+            token,
+            embed_mouse: true,
+            screens_only: true,
+            persist: true,
+            allow_multiple: false,
+        };
+
+        Self::new_raw(
+            m.name.clone(),
+            format!("{} {}", m.monitor.x(), m.monitor.y()).into(),
+            vec2(m.monitor.x() as f32, m.monitor.y() as f32),
+            vec2(m.monitor.width() as f32, m.monitor.height() as f32),
             params,
             app,
             finalize_fn,
