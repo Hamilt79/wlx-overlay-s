@@ -4,6 +4,8 @@ use wgui::log::LogErr;
 
 use crate::state::AppState;
 
+const HEADLESS_APPS_TO_BLOCK: &[&str] = &["xr-hotas"];
+
 pub(super) struct InputBlocker {
     use_io_blocks: bool,
     inputs_blocked_last_frame: bool,
@@ -72,12 +74,17 @@ impl InputBlocker {
                 continue;
             }
 
+            let needed_flags = if HEADLESS_APPS_TO_BLOCK.contains(&name.as_str()) {
+                ClientState::ClientSessionActive.into()
+            } else {
+                ClientState::ClientSessionActive | ClientState::ClientSessionVisible
+            };
+
             let Ok(state) = client.state().log_warn("Failed to get client state") else {
                 continue;
             };
 
-            if state.contains(ClientState::ClientSessionActive | ClientState::ClientSessionVisible)
-            {
+            if state.contains(needed_flags) {
                 let _ = if self.use_io_blocks {
                     let flags = match (block_inputs, block_poses) {
                         (true, true) => BlockFlags::BlockPoses | BlockFlags::BlockInputs,
