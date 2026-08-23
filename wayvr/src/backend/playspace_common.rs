@@ -17,8 +17,6 @@ pub struct SpaceGravity {
     space_rot: Quat,
     /// true while gravity is actively moving the playspace
     active: bool,
-    /// set for the single frame on which gravity came to rest
-    just_landed: bool,
 }
 
 pub fn shift_world<OverlayData>(
@@ -52,7 +50,6 @@ impl SpaceGravity {
             space_pos: Vec3A::default(),
             space_rot: Quat::IDENTITY,
             active: false,
-            just_landed: false,
         }
     }
 
@@ -77,12 +74,9 @@ impl SpaceGravity {
         self.space_pos = Vec3A::default();
         self.space_rot = Quat::IDENTITY;
         self.active = false;
-        self.just_landed = false;
     }
 
     pub fn update(&mut self, par: SpaceGravityUpdateParams) -> Option<SpaceGravityUpdateResult> {
-        self.just_landed = false;
-
         if par.dragging || !par.config.space_gravity_enabled {
             self.active = false;
             return None;
@@ -123,16 +117,10 @@ impl SpaceGravity {
             });
         }
 
-        // velocity fell below the threshold: this is the frame gravity came to rest
-        self.just_landed = self.active;
+        // velocity fell below the threshold: gravity has come to rest
         self.active = false;
 
         None
-    }
-
-    /// true only on the frame gravity settled, so callers can react once
-    pub const fn just_landed(&self) -> bool {
-        self.just_landed
     }
 
     /// true while gravity is moving the playspace

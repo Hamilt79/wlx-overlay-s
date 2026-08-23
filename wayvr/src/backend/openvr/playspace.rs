@@ -303,11 +303,6 @@ impl PlayspaceMover {
             self.boost_base = None;
         }
 
-        if self.gravity.just_landed() {
-            // landing discards the boost translation and pulls the user back
-            self.clear_boost(chaperone_mgr, app, overlays);
-        }
-
         if self.drag.is_none() && self.rotate.is_none() && !self.gravity.is_active() {
             self.update_boost(chaperone_mgr, app, overlays);
         } else {
@@ -373,10 +368,7 @@ impl PlayspaceMover {
         mat.translation.y += offset;
         self.playspace_state.openvr_space_center.translation.y = mat.translation.y;
 
-        // fix floor discards the boost translation. Boost is horizontal-only, so this
-        // never fights the Y correction computed above.
-        let boost = self.boost.take_offset();
-        mat.translation -= boost;
+        // fix floor keeps the boost translation but moves the stage, so the cache is stale
         self.boost_base = None;
 
         set_working_copy(&self.universe, chaperone_mgr, &mat);
@@ -476,42 +468,6 @@ impl PlayspaceMover {
         self.boost.take_offset();
         self.boost_base = None;
         self.reset_offset(chaperone_mgr, app, overlays);
-    }
-
-    /// Drops the boost translation and pulls the stage back by it, so the user ends up
-    /// where they would have been had they never boosted.
-    fn clear_boost(
-        &mut self,
-        chaperone_mgr: &mut ChaperoneSetupManager,
-        app: &mut AppState,
-        overlays: &mut OverlayWindowManager<OpenVrOverlayData>,
-    ) {
-        let boost = self.boost.take_offset();
-        self.boost_base = None;
-
-        if boost == Vec3A::ZERO {
-            return;
-        }
-
-        let Some(before) = get_working_copy(&self.universe, chaperone_mgr) else {
-            log::warn!("Can't clear space boost - failed to get zero pose");
-            return;
-        };
-
-        let mut after = before;
-        after.translation -= boost;
-
-        if self.universe == ETrackingUniverseOrigin::TrackingUniverseStanding {
-            let overlay_offset = before.inverse().transform_vector3a(-boost) * -1.0;
-            apply_chaperone_offset(overlay_offset, chaperone_mgr);
-        }
-
-        set_working_copy(&self.universe, chaperone_mgr, &after);
-        chaperone_mgr.commit_working_copy(EChaperoneConfigFile::EChaperoneConfigFile_Live);
-
-        if !app.session.config.space_drag_affects_world {
-            playspace_common::shift_world(overlays, &mut app.anchor, &before, &after);
-        }
     }
 
     /// One step of stick locomotion. Only runs when nothing else is moving the stage.

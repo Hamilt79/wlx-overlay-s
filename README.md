@@ -2,17 +2,24 @@
 
 Changes on top of upstream WayVR:
 
+- **Space boost: analog stick locomotion.** `space_boost` toggles the mode from a controller
+  button, `space_move` reads the stick. Speed scales with how far you push it, past a
+  configurable deadzone, and travel is horizontal along the direction you are facing. \
+  Basically a speed hack \
+  The distance traveled survives a plain space reset and is only reset by the **Full playspace reset** button in Settings \
+- `space_move` defaults to the left thumbstick on OpenXR; bind `space_boost` yourself under Settings -> Bindings.
+- On OpenVR both actions ship unbound, so bind them from SteamVR's controller binding UI.
 - **Space gravity toggle binding.** The `space_fling` action toggles upstream's space gravity on
-  and off from a controller button, so you can stop drifting without opening the dashboard. The
-  toggle is session-only and is not written back to the config file.
+  and off from a controller button, so you can stop drifting without opening the dashboard. 
+- **Space gravity works on OpenVR.** Upstream restricts it to Monado, which left the toggle
+  above with nothing to drive under SteamVR. I *think* it works. 
 - **Absolute space rotate.** The rotation is recomputed from the grab pose every frame instead of
   accumulating per-frame deltas, takes the shortest path around the rotation, and pivots around
-  the HMD position captured when the gesture started rather than following your head mid-gesture.
-- **Space gravity keeps the playspace rotation.** Upstream rebuilds the stage offset from
-  translation alone while gravity is running, which snaps any space rotation — or the yaw applied
-  by a recenter — back to identity.
+  the HMD position captured when the gesture started rather than following your head mid-gesture. Just
+  my personal preference.
+- **Space gravity keeps the playspace rotation.**
 
-For the zero-gravity fling behaviour this fork originally added, set gravity to 0, damping to 1.0
+For the zero-gravity fling behavior this fork originally added, set gravity to 0, damping to 1.0
 and ground friction to 0 under Settings -> Playspace.
 
 ![WayVR splash screen header](https://github.com/wayvr-org/wayvr/blob/guide/wayvr-readme-header.webp?raw=true)
