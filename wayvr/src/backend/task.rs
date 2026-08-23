@@ -66,6 +66,7 @@ pub enum OpenXrTask {
 pub enum PlayspaceTask {
     Recenter,
     Reset,
+    FullReset,
     FixFloor,
     SaveCenter,
     ResetCenter,

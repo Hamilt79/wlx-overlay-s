@@ -51,6 +51,16 @@
       "requirement": "optional"
     },
     {
+      "name": "/actions/default/in/SpaceBoost",
+      "type": "boolean",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/default/in/SpaceMove",
+      "type": "vector2",
+      "requirement": "optional"
+    },
+    {
       "name": "/actions/default/in/SpaceRotate",
       "type": "boolean",
       "requirement": "optional"

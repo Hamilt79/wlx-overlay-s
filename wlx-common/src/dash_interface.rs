@@ -41,6 +41,7 @@ pub enum DashPlayspaceTask {
 	FixFloor,
 	Recenter,
 	Reset,
+	FullReset,
 	SaveCenter,
 	ResetCenter,
 }

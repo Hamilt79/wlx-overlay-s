@@ -15,6 +15,14 @@
 // -- space_fling --
 // toggle space gravity on/off (lets you fling yourself with space drag)
 //
+// -- space_boost --
+// toggle stick locomotion on/off; while on, space_move pushes your playspace
+//
+// -- space_move --
+// analog stick that moves your playspace while space_boost is toggled on.
+// bind to a 2D input (thumbstick or trackpad), not a single axis.
+// unbound by default: bind space_boost yourself to switch the mode on.
+//
 // -- toggle_dashboard --
 // run or toggle visibility of a previously configured WayVR-compatible dashboard
 //
@@ -102,6 +110,9 @@
       left: "/user/hand/left/input/thumbstick/y",
       right: "/user/hand/right/input/thumbstick/y"
     },
+    space_move: {
+      left: "/user/hand/left/input/thumbstick",
+    },
     scroll_horizontal: {
       left: "/user/hand/left/input/thumbstick/x",
       right: "/user/hand/right/input/thumbstick/x"
@@ -162,6 +173,9 @@
     scroll: {
       left: "/user/hand/left/input/thumbstick/y",
       right: "/user/hand/right/input/thumbstick/y"
+    },
+    space_move: {
+      left: "/user/hand/left/input/thumbstick",
     },
     scroll_horizontal: {
       left: "/user/hand/left/input/thumbstick/x",
@@ -251,6 +265,9 @@
       left: "/user/hand/left/input/thumbstick/y",
       right: "/user/hand/right/input/thumbstick/y"
     },
+    space_move: {
+      left: "/user/hand/left/input/thumbstick",
+    },
     haptic: {
       left: "/user/hand/left/output/haptic",
       right: "/user/hand/right/output/haptic"
@@ -275,6 +292,9 @@
     scroll: {
       left: "/user/hand/left/input/trackpad/y",
       right: "/user/hand/right/input/trackpad/y"
+    },
+    space_move: {
+      left: "/user/hand/left/input/trackpad",
     },
     scroll_horizontal: {
       left: "/user/hand/left/input/trackpad/x",
@@ -338,6 +358,9 @@
       left: "/user/hand/left/input/thumbstick/y",
       right: "/user/hand/right/input/thumbstick/y"
     },
+    space_move: {
+      left: "/user/hand/left/input/thumbstick",
+    },
     scroll_horizontal: {
       left: "/user/hand/left/input/thumbstick/x",
       right: "/user/hand/right/input/thumbstick/x"
@@ -396,6 +419,9 @@
     scroll: {
       left: "/user/hand/left/input/thumbstick/y",
       right: "/user/hand/right/input/thumbstick/y"
+    },
+    space_move: {
+      left: "/user/hand/left/input/thumbstick",
     },
     scroll_horizontal: {
       left: "/user/hand/left/input/thumbstick/x",
@@ -470,6 +496,9 @@
       left: "/user/hand/left/input/thumbstick/y",
       right: "/user/hand/right/input/thumbstick/y"
     },
+    space_move: {
+      left: "/user/hand/left/input/thumbstick",
+    },
     scroll_horizontal: {
       left: "/user/hand/left/input/thumbstick/x",
       right: "/user/hand/right/input/thumbstick/x"
@@ -520,6 +549,9 @@
     scroll: {
       left: "/user/hand/left/input/thumbstick/y",
       right: "/user/hand/right/input/thumbstick/y"
+    },
+    space_move: {
+      left: "/user/hand/left/input/thumbstick",
     },
     scroll_horizontal: {
       left: "/user/hand/left/input/thumbstick/x",
@@ -576,6 +608,9 @@
     scroll: {
       left: "/user/hand/left/input/thumbstick/y",
       right: "/user/hand/right/input/thumbstick/y"
+    },
+    space_move: {
+      left: "/user/hand/left/input/thumbstick",
     },
     scroll_horizontal: {
       left: "/user/hand/left/input/thumbstick/x",

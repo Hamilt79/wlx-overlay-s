@@ -511,6 +511,7 @@ impl DashInterface<AppState> for DashInterfaceLive {
             DashPlayspaceTask::FixFloor => PlayspaceTask::FixFloor,
             DashPlayspaceTask::Recenter => PlayspaceTask::Recenter,
             DashPlayspaceTask::Reset => PlayspaceTask::Reset,
+            DashPlayspaceTask::FullReset => PlayspaceTask::FullReset,
             DashPlayspaceTask::SaveCenter => PlayspaceTask::SaveCenter,
             DashPlayspaceTask::ResetCenter => PlayspaceTask::ResetCenter,
         };

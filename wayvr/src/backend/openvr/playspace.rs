@@ -1,4 +1,4 @@
-use glam::{Affine3A, Quat, Vec3, Vec3A, vec3a};
+use glam::{Affine3A, Quat, Vec2, Vec3, Vec3A, vec3a};
 use ovr_overlay::{
     chaperone_setup::ChaperoneSetupManager,
     compositor::CompositorManager,
@@ -7,7 +7,12 @@ use ovr_overlay::{
 use wgui::log::LogErr;
 
 use crate::{
-    backend::{playspace_common, task::PlayspaceTask},
+    backend::{
+        playspace_common::{
+            self, SpaceBoost, SpaceBoostUpdateParams, SpaceGravity, SpaceGravityUpdateParams,
+        },
+        task::PlayspaceTask,
+    },
     state::{AppState, PlayspaceState, load_playspace_state, save_playspace_state},
     windowing::manager::OverlayWindowManager,
 };
@@ -40,6 +45,10 @@ pub(super) struct PlayspaceMover {
     universe: ETrackingUniverseOrigin,
     drag: Option<MoverData<Vec3A>>,
     rotate: Option<RotateData>,
+    gravity: SpaceGravity,
+    boost: SpaceBoost,
+    /// cached working copy for the boost path. None means it has gone stale
+    boost_base: Option<Affine3A>,
     playspace_state: PlayspaceState,
 }
 
@@ -49,6 +58,9 @@ impl PlayspaceMover {
             universe: ETrackingUniverseOrigin::TrackingUniverseRawAndUncalibrated,
             drag: None,
             rotate: None,
+            gravity: SpaceGravity::new(),
+            boost: SpaceBoost::new(),
+            boost_base: None,
             playspace_state: load_playspace_state().unwrap_or_default(),
         }
     }
@@ -66,6 +78,9 @@ impl PlayspaceMover {
             }
             PlayspaceTask::Reset => {
                 self.reset_offset(chaperone_mgr, app, overlays);
+            }
+            PlayspaceTask::FullReset => {
+                self.full_reset(chaperone_mgr, app, overlays);
             }
             PlayspaceTask::Recenter => {
                 self.recenter(chaperone_mgr, app, overlays);
@@ -87,6 +102,32 @@ impl PlayspaceMover {
         app: &mut AppState,
     ) {
         let universe = self.universe.clone();
+
+        // `space_fling` toggles space gravity, `space_boost` toggles stick locomotion.
+        // Both are session-only and are not written back to the config file.
+        if app
+            .input_state
+            .pointers
+            .iter()
+            .any(|p| p.now.space_fling && !p.before.space_fling)
+        {
+            let enabled = !app.session.config.space_gravity_enabled;
+            app.session.config.space_gravity_enabled = enabled;
+            if !enabled {
+                self.gravity.reset();
+            }
+            log::info!("Space gravity {}", if enabled { "enabled" } else { "disabled" });
+        }
+
+        if app
+            .input_state
+            .pointers
+            .iter()
+            .any(|p| p.now.space_boost && !p.before.space_boost)
+        {
+            let enabled = self.boost.toggle();
+            log::info!("Space boost {}", if enabled { "enabled" } else { "disabled" });
+        }
 
         if let Some(data) = self.rotate.as_mut() {
             let pointer = &app.input_state.pointers[data.hand];
@@ -168,13 +209,6 @@ impl PlayspaceMover {
         }
 
         if let Some(data) = self.drag.as_mut() {
-            let pointer = &app.input_state.pointers[data.hand];
-            if !pointer.now.space_drag {
-                self.drag = None;
-                log::info!("End space drag");
-                return;
-            }
-
             let new_hand = data
                 .pose
                 .transform_point3a(app.input_state.pointers[data.hand].raw_pose.translation);
@@ -184,6 +218,17 @@ impl PlayspaceMover {
             } else {
                 vec3a(0., new_hand.y - data.hand_pose.y, 0.)
             } * app.session.config.space_drag_multiplier;
+
+            let pointer = &app.input_state.pointers[data.hand];
+            if !pointer.now.space_drag {
+                // hand this frame's movement to gravity so it can fling from it
+                let drag_pose = data.pose;
+                self.gravity
+                    .mark_end_drag(&app.session.config, relative_pos, drag_pose, app.delta_time);
+                self.drag = None;
+                log::info!("End space drag");
+                return;
+            }
 
             if relative_pos.length_squared() > 1000.0 {
                 log::warn!("Space drag too fast, ignoring");
@@ -230,6 +275,44 @@ impl PlayspaceMover {
                 return;
             }
         }
+
+        if let Some(res) = self.gravity.update(SpaceGravityUpdateParams {
+            dt: app.delta_time,
+            dragging: self.drag.is_some(),
+            config: &app.session.config,
+            floor_height: app.session.config.space_gravity_floor_height,
+        }) {
+            if self.universe == ETrackingUniverseOrigin::TrackingUniverseStanding {
+                let moved = res.playspace_pose.translation - res.previous_pose.translation;
+                let overlay_offset = res.previous_pose.inverse().transform_vector3a(moved) * -1.0;
+                apply_chaperone_offset(overlay_offset, chaperone_mgr);
+            }
+
+            set_working_copy(&universe, chaperone_mgr, &res.playspace_pose);
+            chaperone_mgr.commit_working_copy(EChaperoneConfigFile::EChaperoneConfigFile_Live);
+
+            if !app.session.config.space_drag_affects_world {
+                playspace_common::shift_world(
+                    overlays,
+                    &mut app.anchor,
+                    &res.previous_pose,
+                    &res.playspace_pose,
+                );
+            }
+
+            self.boost_base = None;
+        }
+
+        if self.gravity.just_landed() {
+            // landing discards the boost translation and pulls the user back
+            self.clear_boost(chaperone_mgr, app, overlays);
+        }
+
+        if self.drag.is_none() && self.rotate.is_none() && !self.gravity.is_active() {
+            self.update_boost(chaperone_mgr, app, overlays);
+        } else {
+            self.boost_base = None;
+        }
     }
 
     pub fn reset_offset(
@@ -247,6 +330,12 @@ impl PlayspaceMover {
         if self.universe == ETrackingUniverseOrigin::TrackingUniverseSeated {
             xform.translation.y -= 1.7;
         }
+
+        self.gravity.reset();
+        // the boost translation deliberately survives a plain reset; only a full reset
+        // (or fix floor / a gravity landing) throws it away
+        xform.translation += self.boost.offset();
+        self.boost_base = Some(xform);
 
         set_working_copy(&self.universe, chaperone_mgr, &xform);
         chaperone_mgr.commit_working_copy(EChaperoneConfigFile::EChaperoneConfigFile_Live);
@@ -284,6 +373,12 @@ impl PlayspaceMover {
         mat.translation.y += offset;
         self.playspace_state.openvr_space_center.translation.y = mat.translation.y;
 
+        // fix floor discards the boost translation. Boost is horizontal-only, so this
+        // never fights the Y correction computed above.
+        let boost = self.boost.take_offset();
+        mat.translation -= boost;
+        self.boost_base = None;
+
         set_working_copy(&self.universe, chaperone_mgr, &mat);
         chaperone_mgr.commit_working_copy(EChaperoneConfigFile::EChaperoneConfigFile_Live);
 
@@ -315,6 +410,10 @@ impl PlayspaceMover {
             log::info!("Space rotate interrupted by recenter");
             self.rotate = None;
         }
+
+        self.gravity.reset();
+        // recenter keeps the boost translation but moves the stage, so the cache is stale
+        self.boost_base = None;
 
         let input = &app.input_state;
         let anchor = &mut app.anchor;
@@ -362,6 +461,114 @@ impl PlayspaceMover {
 
         if !app.session.config.space_drag_affects_world {
             playspace_common::shift_world(overlays, anchor, &before, &new_mat);
+        }
+    }
+
+    /// Like `reset_offset`, but also throws away the translation contributed by space
+    /// boost instead of carrying it through.
+    pub fn full_reset(
+        &mut self,
+        chaperone_mgr: &mut ChaperoneSetupManager,
+        app: &mut AppState,
+        overlays: &mut OverlayWindowManager<OpenVrOverlayData>,
+    ) {
+        log::info!("Full playspace reset");
+        self.boost.take_offset();
+        self.boost_base = None;
+        self.reset_offset(chaperone_mgr, app, overlays);
+    }
+
+    /// Drops the boost translation and pulls the stage back by it, so the user ends up
+    /// where they would have been had they never boosted.
+    fn clear_boost(
+        &mut self,
+        chaperone_mgr: &mut ChaperoneSetupManager,
+        app: &mut AppState,
+        overlays: &mut OverlayWindowManager<OpenVrOverlayData>,
+    ) {
+        let boost = self.boost.take_offset();
+        self.boost_base = None;
+
+        if boost == Vec3A::ZERO {
+            return;
+        }
+
+        let Some(before) = get_working_copy(&self.universe, chaperone_mgr) else {
+            log::warn!("Can't clear space boost - failed to get zero pose");
+            return;
+        };
+
+        let mut after = before;
+        after.translation -= boost;
+
+        if self.universe == ETrackingUniverseOrigin::TrackingUniverseStanding {
+            let overlay_offset = before.inverse().transform_vector3a(-boost) * -1.0;
+            apply_chaperone_offset(overlay_offset, chaperone_mgr);
+        }
+
+        set_working_copy(&self.universe, chaperone_mgr, &after);
+        chaperone_mgr.commit_working_copy(EChaperoneConfigFile::EChaperoneConfigFile_Live);
+
+        if !app.session.config.space_drag_affects_world {
+            playspace_common::shift_world(overlays, &mut app.anchor, &before, &after);
+        }
+    }
+
+    /// One step of stick locomotion. Only runs when nothing else is moving the stage.
+    fn update_boost(
+        &mut self,
+        chaperone_mgr: &mut ChaperoneSetupManager,
+        app: &mut AppState,
+        overlays: &mut OverlayWindowManager<OpenVrOverlayData>,
+    ) {
+        if !self.boost.enabled() {
+            return;
+        }
+
+        // whichever hand is pushing hardest wins, so the binding works on either side
+        let stick = app
+            .input_state
+            .pointers
+            .iter()
+            .map(|p| Vec2::new(p.now.space_move_x, p.now.space_move_y))
+            .max_by(|a, b| a.length_squared().total_cmp(&b.length_squared()))
+            .unwrap_or(Vec2::ZERO);
+
+        let base = if let Some(base) = self.boost_base {
+            base
+        } else {
+            let Some(base) = get_working_copy(&self.universe, chaperone_mgr) else {
+                log::warn!("Can't space boost - failed to get zero pose");
+                return;
+            };
+            base
+        };
+
+        let Some(delta) = self.boost.update(&SpaceBoostUpdateParams {
+            dt: app.delta_time,
+            config: &app.session.config,
+            hmd: base * app.input_state.hmd,
+            stick,
+        }) else {
+            // cache the base anyway: it is still correct, just unused this frame
+            self.boost_base = Some(base);
+            return;
+        };
+
+        let mut after = base;
+        after.translation += delta;
+
+        if self.universe == ETrackingUniverseOrigin::TrackingUniverseStanding {
+            let overlay_offset = base.inverse().transform_vector3a(delta) * -1.0;
+            apply_chaperone_offset(overlay_offset, chaperone_mgr);
+        }
+
+        set_working_copy(&self.universe, chaperone_mgr, &after);
+        chaperone_mgr.commit_working_copy(EChaperoneConfigFile::EChaperoneConfigFile_Live);
+        self.boost_base = Some(after);
+
+        if !app.session.config.space_drag_affects_world {
+            playspace_common::shift_world(overlays, &mut app.anchor, &base, &after);
         }
     }
 

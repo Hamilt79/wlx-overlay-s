@@ -135,6 +135,14 @@
 ## Space gravity: ground friction when touching the floor
 #space_gravity_ground_friction: 1.0
 
+## Space boost: top playspace speed in m/s at full stick deflection.
+## Requires the `space_boost` binding to toggle the mode on, and `space_move`
+## bound to a thumbstick or trackpad.
+#space_boost_speed: 2.0
+
+## Space boost: stick deflection below this fraction is ignored
+#space_boost_deadzone: 0.15
+
 ## Monado/WiVRn only. Use passthrough camera if the headset supports it.
 ## If disabled, the skybox will be shown.
 #use_passthrough: true

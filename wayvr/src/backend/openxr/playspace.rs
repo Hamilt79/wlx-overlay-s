@@ -1,10 +1,12 @@
-use glam::{Affine3A, Quat, Vec3, Vec3A, vec3a};
+use glam::{Affine3A, Quat, Vec2, Vec3, Vec3A, vec3a};
 use libmonado::{Monado, Pose, ReferenceSpaceType};
 use wgui::log::LogErr;
 
 use crate::{
     backend::{
-        playspace_common::{self, SpaceGravity, SpaceGravityUpdateParams},
+        playspace_common::{
+            self, SpaceBoost, SpaceBoostUpdateParams, SpaceGravity, SpaceGravityUpdateParams,
+        },
         task::PlayspaceTask,
     },
     state::{AppState, PlayspaceState, load_playspace_state, save_playspace_state},
@@ -39,6 +41,10 @@ pub(super) struct PlayspaceMover {
     drag: Option<MoverData<Vec3A>>,
     rotate: Option<RotateData>,
     gravity: SpaceGravity,
+    boost: SpaceBoost,
+    /// cached stage offset for the boost path. None means it has gone stale and must be
+    /// re-read from the runtime before the next boost step
+    boost_base: Option<Affine3A>,
     playspace_state: PlayspaceState,
 }
 
@@ -50,6 +56,8 @@ impl PlayspaceMover {
             drag: None,
             rotate: None,
             gravity: SpaceGravity::new(),
+            boost: SpaceBoost::new(),
+            boost_base: None,
             playspace_state: load_playspace_state().unwrap_or_default(),
         }
     }
@@ -70,6 +78,9 @@ impl PlayspaceMover {
             }
             PlayspaceTask::Reset => {
                 self.reset_offset(app, overlays);
+            }
+            PlayspaceTask::FullReset => {
+                self.full_reset(app, overlays);
             }
             PlayspaceTask::Recenter => {
                 self.recenter(app, overlays);
@@ -108,6 +119,18 @@ impl PlayspaceMover {
                 self.gravity.reset();
             }
             log::info!("Space gravity {}", if enabled { "enabled" } else { "disabled" });
+        }
+
+        // `space_boost` toggles stick locomotion. The distance already travelled is kept
+        // when switching off, so a plain space reset still returns you to it.
+        if app
+            .input_state
+            .pointers
+            .iter()
+            .any(|p| p.now.space_boost && !p.before.space_boost)
+        {
+            let enabled = self.boost.toggle();
+            log::info!("Space boost {}", if enabled { "enabled" } else { "disabled" });
         }
 
         for pointer in &app.input_state.pointers {
@@ -290,6 +313,18 @@ impl PlayspaceMover {
                 );
             }
         }
+
+        if self.gravity.just_landed() {
+            // landing discards the boost translation and pulls the user back
+            self.clear_boost(app, overlays);
+        }
+
+        if self.drag.is_none() && self.rotate.is_none() && !self.gravity.is_active() {
+            self.update_boost(app, overlays);
+        } else {
+            // something else moved the stage: the cached base is no longer valid
+            self.boost_base = None;
+        }
     }
 
     pub fn recenter(
@@ -309,6 +344,9 @@ impl PlayspaceMover {
             log::info!("Space rotate interrupted by recenter");
             self.rotate = None;
         }
+
+        // recenter keeps the boost translation but moves the stage, so the cache is stale
+        self.boost_base = None;
 
         let input = &app.input_state;
         let anchor = &mut app.anchor;
@@ -397,7 +435,11 @@ impl PlayspaceMover {
             Affine3A::from_rotation_translation(pose.orientation.into(), pose.position.into());
 
         self.gravity.reset();
-        let offset = self.playspace_state.openxr_space_center;
+        // the boost translation deliberately survives a plain reset; only a full reset
+        // (or fix floor / a gravity landing) throws it away
+        let mut offset = self.playspace_state.openxr_space_center;
+        offset.translation += self.boost.offset();
+        self.boost_base = Some(offset);
         apply_offset(offset, &mut monado.ipc);
 
         if !app.session.config.space_drag_affects_world {
@@ -446,6 +488,14 @@ impl PlayspaceMover {
 
         self.playspace_state.openxr_space_center.translation.y = pose.position.y;
 
+        // fix floor discards the boost translation, pulling the user back to where they
+        // would be without it. Boost is horizontal-only, so this never fights the Y
+        // correction computed above.
+        let boost = self.boost.take_offset();
+        pose.position.x -= boost.x;
+        pose.position.z -= boost.z;
+        self.boost_base = None;
+
         let _ = monado
             .ipc
             .set_reference_space_offset(ReferenceSpaceType::Stage, pose)
@@ -456,6 +506,116 @@ impl PlayspaceMover {
 
         if !app.session.config.space_drag_affects_world {
             playspace_common::shift_world(overlays, anchor, &before, &after);
+        }
+    }
+
+    /// Like `reset_offset`, but also throws away the translation contributed by space
+    /// boost instead of carrying it through.
+    pub fn full_reset(
+        &mut self,
+        app: &mut AppState,
+        overlays: &mut OverlayWindowManager<OpenXrOverlayData>,
+    ) {
+        log::info!("Full playspace reset");
+        self.boost.take_offset();
+        self.boost_base = None;
+        self.reset_offset(app, overlays);
+    }
+
+    /// Drops the boost translation and pulls the stage back by it, so the user ends up
+    /// where they would have been had they never boosted.
+    fn clear_boost(
+        &mut self,
+        app: &mut AppState,
+        overlays: &mut OverlayWindowManager<OpenXrOverlayData>,
+    ) {
+        let boost = self.boost.take_offset();
+        self.boost_base = None;
+
+        if boost == Vec3A::ZERO {
+            return;
+        }
+
+        let Some(monado) = &mut app.monado_state else {
+            return;
+        };
+
+        let Ok(pose) = monado
+            .ipc
+            .get_reference_space_offset(ReferenceSpaceType::Stage)
+            .log_err("Could not get reference space offset.")
+        else {
+            return;
+        };
+
+        let before =
+            Affine3A::from_rotation_translation(pose.orientation.into(), pose.position.into());
+
+        let mut after = before;
+        after.translation -= boost;
+
+        apply_offset(after, &mut monado.ipc);
+
+        if !app.session.config.space_drag_affects_world {
+            playspace_common::shift_world(overlays, &mut app.anchor, &before, &after);
+        }
+    }
+
+    /// One step of stick locomotion. Only runs when nothing else is moving the stage.
+    fn update_boost(
+        &mut self,
+        app: &mut AppState,
+        overlays: &mut OverlayWindowManager<OpenXrOverlayData>,
+    ) {
+        if !self.boost.enabled() {
+            return;
+        }
+
+        // whichever hand is pushing hardest wins, so the binding works on either side
+        let stick = app
+            .input_state
+            .pointers
+            .iter()
+            .map(|p| Vec2::new(p.now.space_move_x, p.now.space_move_y))
+            .max_by(|a, b| a.length_squared().total_cmp(&b.length_squared()))
+            .unwrap_or(Vec2::ZERO);
+
+        let Some(monado) = &mut app.monado_state else {
+            return;
+        };
+
+        let base = if let Some(base) = self.boost_base {
+            base
+        } else {
+            let Ok(pose) = monado
+                .ipc
+                .get_reference_space_offset(ReferenceSpaceType::Stage)
+                .log_err("Could not get reference space offset.")
+            else {
+                return;
+            };
+            Affine3A::from_rotation_translation(pose.orientation.into(), pose.position.into())
+        };
+
+        let Some(delta) = self.boost.update(&SpaceBoostUpdateParams {
+            dt: app.delta_time,
+            config: &app.session.config,
+            hmd: base * app.input_state.hmd,
+            stick,
+        }) else {
+            // cache the base anyway: it is still correct, just unused this frame
+            self.boost_base = Some(base);
+            return;
+        };
+
+        let mut after = base;
+        after.translation += delta;
+
+        apply_offset(after, &mut monado.ipc);
+        self.boost_base = Some(after);
+
+        if !app.session.config.space_drag_affects_world {
+            playspace_common::shift_world(overlays, &mut app.anchor, &base, &after);
         }
     }
 

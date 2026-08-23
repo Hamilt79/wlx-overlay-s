@@ -81,6 +81,7 @@ pub(crate) enum Task {
 	OpenContextMenu(Vec2, Vec<context_menu::Cell>),
 	RemoveAutostartApp(Rc<str>),
 	ResetPlayspace,
+	FullResetPlayspace,
 	ResetPlayspaceCenter,
 	RestartSoftware,
 	SavePlayspaceCenter,
@@ -228,6 +229,10 @@ impl<T> Tab<T> for TabSettings<T> {
 					frontend.interface.playspace_task(data, DashPlayspaceTask::Reset)?;
 					return Ok(());
 				}
+				Task::FullResetPlayspace => {
+					frontend.interface.playspace_task(data, DashPlayspaceTask::FullReset)?;
+					return Ok(());
+				}
 				Task::RestartSoftware => {
 					frontend.interface.restart(data);
 					return Ok(());
@@ -354,6 +359,8 @@ pub(crate) enum SettingType {
 	ScrollSpeed,
 	SnapAngleDeg,
 	SetsOnWatch,
+	SpaceBoostDeadzone,
+	SpaceBoostSpeed,
 	SpaceDragAffectsWorld,
 	SpaceDragMultiplier,
 	SpaceDragUnlocked,
@@ -429,6 +436,8 @@ impl SettingType {
 			Self::MouseSpeed => &mut config.wvr_mouse_speed,
 			Self::ScrollSpeed => &mut config.scroll_speed,
 			Self::SnapAngleDeg => &mut config.snap_angle_deg,
+			Self::SpaceBoostSpeed => &mut config.space_boost_speed,
+			Self::SpaceBoostDeadzone => &mut config.space_boost_deadzone,
 			Self::SpaceDragMultiplier => &mut config.space_drag_multiplier,
 			Self::SpaceGravityDamping => &mut config.space_gravity_damping,
 			Self::SpaceGravityFlingStrength => &mut config.space_gravity_fling_strength,
@@ -562,6 +571,8 @@ impl SettingType {
 			Self::SetsOnWatch => Ok("APP_SETTINGS.SETS_ON_WATCH"),
 			Self::SnapAngleDeg => Ok("APP_SETTINGS.SNAP_ANGLE_DEG"),
 			Self::SpaceDragAffectsWorld => Ok("APP_SETTINGS.SPACE_DRAG_AFFECTS_WORLD"),
+			Self::SpaceBoostSpeed => Ok("APP_SETTINGS.SPACE_BOOST_SPEED"),
+			Self::SpaceBoostDeadzone => Ok("APP_SETTINGS.SPACE_BOOST_DEADZONE"),
 			Self::SpaceDragMultiplier => Ok("APP_SETTINGS.SPACE_DRAG_MULTIPLIER"),
 			Self::SpaceDragUnlocked => Ok("APP_SETTINGS.SPACE_DRAG_UNLOCKED"),
 			Self::SpaceGravityDamping => Ok("APP_SETTINGS.SPACE_GRAVITY_DAMPING"),

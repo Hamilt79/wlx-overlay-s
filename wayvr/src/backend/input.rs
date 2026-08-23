@@ -380,6 +380,8 @@ impl Pointer {
 pub struct PointerState {
     pub scroll_x: f32,
     pub scroll_y: f32,
+    pub space_move_x: f32,
+    pub space_move_y: f32,
     pub click: bool,
     pub grab: bool,
     pub grab_float: bool,
@@ -389,6 +391,7 @@ pub struct PointerState {
     pub space_drag: bool,
     pub space_rotate: bool,
     pub space_fling: bool,
+    pub space_boost: bool,
     pub space_reset: bool,
     pub click_modifier_right: bool,
     pub click_modifier_middle: bool,

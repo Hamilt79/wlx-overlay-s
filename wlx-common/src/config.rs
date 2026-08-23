@@ -263,6 +263,10 @@ const fn def_one() -> f32 {
 	1.0
 }
 
+const fn def_two() -> f32 {
+	2.0
+}
+
 const fn def_half() -> f32 {
 	0.5
 }
@@ -467,6 +471,14 @@ pub struct GeneralConfig {
 
 	#[serde(default)]
 	pub space_gravity_floor_height: f32,
+
+	/// max playspace speed in m/s at full stick deflection while space boost is on
+	#[serde(default = "def_two")]
+	pub space_boost_speed: f32,
+
+	/// stick deflection below this is ignored, remapped so motion starts at zero
+	#[serde(default = "def_point15")]
+	pub space_boost_deadzone: f32,
 
 	#[serde(default)]
 	pub alt_click_down: Vec<String>,

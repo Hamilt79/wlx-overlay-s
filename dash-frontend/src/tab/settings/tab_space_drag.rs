@@ -68,6 +68,14 @@ impl State {
 			options_button(
 				par.mp,
 				c,
+				"APP_SETTINGS.FULL_RESET_PLAYSPACE",
+				"dashboard/refresh.svg",
+				super::Task::FullResetPlayspace,
+			)?;
+
+			options_button(
+				par.mp,
+				c,
 				"APP_SETTINGS.SAVE_PLAYSPACE_CENTER",
 				"dashboard/recenter.svg",
 				super::Task::SavePlayspaceCenter,
@@ -93,6 +101,24 @@ impl State {
 				10.0,
 				0.5,
 			)?;
+
+			options_slider_f32(
+				par.mp,
+				id_common_options_parent,
+				SettingType::SpaceBoostSpeed,
+				0.0,
+				10.0,
+				0.1,
+			)?;
+
+			options_slider_f32(
+				par.mp,
+				id_common_options_parent,
+				SettingType::SpaceBoostDeadzone,
+				0.0,
+				0.9,
+				0.01,
+			)?;
 		}
 
 		if par.feats.monado {
@@ -100,7 +126,7 @@ impl State {
 			options_checkbox(par.mp, id_common_options_parent, SettingType::SpaceRotateUnlocked)?;
 		}
 
-		if par.feats.monado {
+		if par.feats.monado || par.feats.xr_backend.is_open_vr() {
 			/* space gravity section */
 			options_checkbox(par.mp, id_gravity_enabled_parent, SettingType::SpaceGravityEnabled)?;
 

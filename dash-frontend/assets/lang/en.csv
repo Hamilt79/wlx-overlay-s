@@ -67,6 +67,8 @@ APP_SETTINGS.BINDINGS.ACTION.SHOW_HIDE,"Show, hide, recenter*",Label for the sho
 APP_SETTINGS.BINDINGS.ACTION.TOGGLE_DASHBOARD,Toggle dashboard,Label for the toggle_dashboard action row. Opens or closes the WayVR dashboard.
 APP_SETTINGS.BINDINGS.ACTION.SPACE_DRAG,Playspace drag,"Label for the space_drag action row. Allows dragging the entire playspace/set of overlays. ""Playspace"" was previously translated as ""${DEFINITIONS.PLAYSPACE}""."
 APP_SETTINGS.BINDINGS.ACTION.SPACE_FLING,Toggle playspace gravity,Label for the space_fling action row. Toggles playspace gravity on or off.
+APP_SETTINGS.BINDINGS.ACTION.SPACE_BOOST,Toggle stick locomotion,Label for the space_boost action row. Toggles analog stick playspace locomotion on or off.
+APP_SETTINGS.BINDINGS.ACTION.SPACE_MOVE,Stick locomotion axis,Label for the space_move action row. The analog stick that drives playspace locomotion while space_boost is on.
 APP_SETTINGS.BINDINGS.ACTION.SPACE_ROTATE,Playspace rotate,"Label for the space_rotate action row. Allows rotating the entire playspace/set. ""Playspace"" was previously translated as ""${DEFINITIONS.PLAYSPACE}""."
 APP_SETTINGS.BINDINGS.ACTION.SPACE_RESET,Playspace reset,"Label for the space_reset action row. Resets playspace to the original state. ""Playspace"" was previously translated as ""${DEFINITIONS.PLAYSPACE}""."
 APP_SETTINGS.BINDINGS.ACTION.CLICK_MODIFIER_RIGHT,Right-click modifier,Label for the click_modifier_right action row. Maps a controller input to act as a right-click modifier.
@@ -191,6 +193,7 @@ APP_SETTINGS.POINTER_LERP_FACTOR,Pointer smoothing,Slider in Settings > Features
 APP_SETTINGS.POINTER_SPEED,Mouse speed,Slider in Settings > Features tab. Controls the base mouse pointer speed.
 APP_SETTINGS.REQUIRES_RESTART,Requires restart,Label shown below settings that require a software restart to take effect.
 APP_SETTINGS.RESET_PLAYSPACE,Reset playspace,"Button in Settings > Space Drag tab. Clears the stage space offset, resetting playspace position. ""Playspace"" was previously translated as ""${DEFINITIONS.PLAYSPACE}""."
+APP_SETTINGS.FULL_RESET_PLAYSPACE,Full playspace reset,Button in Settings > Space Drag tab. Like Reset playspace but also discards distance travelled with stick locomotion.
 APP_SETTINGS.RESET_PLAYSPACE_HELP,Clear the stage space offset.,"Tooltip for the Reset playspace button. ""Space"" in this context refers to ""Playspace"" which was translated as ""${DEFINITIONS.PLAYSPACE}""."
 APP_SETTINGS.SAVE_PLAYSPACE_CENTER,Save playspace center,"Button in Settings > Space Drag tab. Saves the current playspace center as the reset target. ""Playspace"" was previously translated as ""${DEFINITIONS.PLAYSPACE}""."
 APP_SETTINGS.SAVE_PLAYSPACE_CENTER_HELP,Use current playspace for reset playspace binding.,"Tooltip for the Save playspace center button. ""Playspace"" was previously translated as ""${DEFINITIONS.PLAYSPACE}""."
@@ -212,6 +215,8 @@ APP_SETTINGS.SKYBOX,Skymap,"Category header in Settings > Skymap tab. Groups sky
 APP_SETTINGS.SKYMAP_ALREADY_DOWNLOADED,This skymap is already downloaded. Select desired action.,"Message shown in a dialog when attempting to download a skymap that is already present locally. ""Skymap"" was previously translated as ""${DEFINITIONS.SKYMAP}""."
 APP_SETTINGS.SPACE_DRAG,Playspace,"Category header in Settings. Groups playspace drag/physics settings including reset buttons and gravity. ""Playspace"" was previously translated as ""${DEFINITIONS.PLAYSPACE}""."
 APP_SETTINGS.SPACE_DRAG_MULTIPLIER,Space drag multiplier,"Setting in the space drag physics panel. Multiplies the force applied during space drag. ""Space"" in this context refers to ""Playspace"" which was translated as ""${DEFINITIONS.PLAYSPACE}""."
+APP_SETTINGS.SPACE_BOOST_SPEED,Stick locomotion speed,Setting in the space drag panel. Top playspace speed in metres per second at full stick deflection.
+APP_SETTINGS.SPACE_BOOST_DEADZONE,Stick locomotion deadzone,Setting in the space drag panel. Stick deflection below this fraction is ignored.
 APP_SETTINGS.SPACE_DRAG_AFFECTS_WORLD,Leave overlays behind during space move,"Checkbox in Settings > Space Drag tab. When enabled, moving the playspace leaves overlays behind instead of moving them with the set. ""Overlay"" was previously translated as ""${DEFINITIONS.OVERLAY}"". ""Space"" in this context refers to ""Playspace"" which was translated as ""${DEFINITIONS.PLAYSPACE}""."
 APP_SETTINGS.SPACE_DRAG_UNLOCKED,Allow space drag on all axes,"Checkbox in Settings > Space Drag tab. Unlocks space drag to work on all axes instead of a constrained axis. ""Space"" in this context refers to ""Playspace"" which was translated as ""${DEFINITIONS.PLAYSPACE}""."
 APP_SETTINGS.SPACE_GRAVITY_DAMPING,Damping,"Setting in the space gravity physics panel. Artificial drag to slow movement (0.1 = high drag, 1.0 = no drag)."

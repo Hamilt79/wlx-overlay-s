@@ -41,6 +41,8 @@ const PATH_SCROLL: &str = "/actions/default/in/Scroll";
 const PATH_SHOW_HIDE: &str = "/actions/default/in/ShowHide";
 const PATH_SPACE_DRAG: &str = "/actions/default/in/SpaceDrag";
 const PATH_SPACE_FLING: &str = "/actions/default/in/SpaceFling";
+const PATH_SPACE_BOOST: &str = "/actions/default/in/SpaceBoost";
+const PATH_SPACE_MOVE: &str = "/actions/default/in/SpaceMove";
 const PATH_SPACE_ROTATE: &str = "/actions/default/in/SpaceRotate";
 const PATH_SPACE_RESET: &str = "/actions/default/in/SpaceReset";
 const PATH_TOGGLE_DASHBOARD: &str = "/actions/default/in/ToggleDashboard";
@@ -58,6 +60,8 @@ pub(super) struct OpenVrInputSource {
     toggle_dashboard_hnd: ActionHandle,
     space_drag_hnd: ActionHandle,
     space_fling_hnd: ActionHandle,
+    space_boost_hnd: ActionHandle,
+    space_move_hnd: ActionHandle,
     space_rotate_hnd: ActionHandle,
     space_reset_hnd: ActionHandle,
     click_modifier_right_hnd: ActionHandle,
@@ -85,6 +89,8 @@ impl OpenVrInputSource {
         let toggle_dashboard_hnd = input.get_action_handle(PATH_TOGGLE_DASHBOARD)?;
         let space_drag_hnd = input.get_action_handle(PATH_SPACE_DRAG)?;
         let space_fling_hnd = input.get_action_handle(PATH_SPACE_FLING)?;
+        let space_boost_hnd = input.get_action_handle(PATH_SPACE_BOOST)?;
+        let space_move_hnd = input.get_action_handle(PATH_SPACE_MOVE)?;
         let space_rotate_hnd = input.get_action_handle(PATH_SPACE_ROTATE)?;
         let space_reset_hnd = input.get_action_handle(PATH_SPACE_RESET)?;
         let click_modifier_right_hnd = input.get_action_handle(PATH_CLICK_MODIFIER_RIGHT)?;
@@ -125,6 +131,8 @@ impl OpenVrInputSource {
             toggle_dashboard_hnd,
             space_drag_hnd,
             space_fling_hnd,
+            space_boost_hnd,
+            space_move_hnd,
             space_rotate_hnd,
             space_reset_hnd,
             click_modifier_right_hnd,
@@ -249,6 +257,11 @@ impl OpenVrInputSource {
                 .map(|x| x.0.bState)
                 .unwrap_or(false);
 
+            app_hand.now.space_boost = input
+                .get_digital_action_data(self.space_boost_hnd, hand.input_hnd)
+                .map(|x| x.0.bState)
+                .unwrap_or(false);
+
             app_hand.now.space_rotate = input
                 .get_digital_action_data(self.space_rotate_hnd, hand.input_hnd)
                 .is_ok_and(|x| x.0.bState);
@@ -274,6 +287,12 @@ impl OpenVrInputSource {
                 .map_or((0.0, 0.0), |x| (x.0.x, x.0.y));
             app_hand.now.scroll_x = scroll.0;
             app_hand.now.scroll_y = scroll.1;
+
+            let space_move = input
+                .get_analog_action_data(self.space_move_hnd, hand.input_hnd)
+                .map_or((0.0, 0.0), |x| (x.0.x, x.0.y));
+            app_hand.now.space_move_x = space_move.0;
+            app_hand.now.space_move_y = space_move.1;
         }
     }
 

@@ -161,12 +161,14 @@ pub(super) struct OpenXrHandSource {
     toggle_dashboard: CustomClickAction,
     space_drag: CustomClickAction,
     space_fling: CustomClickAction,
+    space_boost: CustomClickAction,
     space_rotate: CustomClickAction,
     space_reset: CustomClickAction,
     modifier_right: CustomClickAction,
     modifier_middle: CustomClickAction,
     move_mouse: CustomClickAction,
     scroll: xr::Action<Vector2f>,
+    space_move: xr::Action<Vector2f>,
     haptics: xr::Action<xr::Haptic>,
 }
 
@@ -501,6 +503,15 @@ impl OpenXrPointer {
         pointer.now.scroll_x = scroll.x;
         pointer.now.scroll_y = scroll.y;
 
+        let space_move = self
+            .source
+            .space_move
+            .state(&xr.session, xr::Path::NULL)?
+            .current_state;
+
+        pointer.now.space_move_x = space_move.x;
+        pointer.now.space_move_y = space_move.y;
+
         pointer.now.alt_click = self.source.alt_click.state(pointer.before.alt_click, xr)?;
 
         pointer.now.show_hide = self.source.show_hide.state(pointer.before.show_hide, xr)?;
@@ -535,6 +546,11 @@ impl OpenXrPointer {
             .space_fling
             .state(pointer.before.space_fling, xr)?;
 
+        pointer.now.space_boost = self
+            .source
+            .space_boost
+            .state(pointer.before.space_boost, xr)?;
+
         pointer.now.space_rotate = self
             .source
             .space_rotate
@@ -563,6 +579,11 @@ impl OpenXrHandSource {
             &format!("{side} hand scroll"),
             &[],
         )?;
+        let action_space_move = action_set.create_action::<Vector2f>(
+            &format!("{side}_space_move"),
+            &format!("{side} hand space move"),
+            &[],
+        )?;
         let action_haptics = action_set.create_action::<xr::Haptic>(
             &format!("{side}_haptics"),
             &format!("{side} hand haptics"),
@@ -574,11 +595,13 @@ impl OpenXrHandSource {
             click: CustomClickAction::new(action_set, "click", side)?,
             grab: CustomClickAction::new(action_set, "grab", side)?,
             scroll: action_scroll,
+            space_move: action_space_move,
             alt_click: CustomClickAction::new(action_set, "alt_click", side)?,
             show_hide: CustomClickAction::new(action_set, "show_hide", side)?,
             toggle_dashboard: CustomClickAction::new(action_set, "toggle_dashboard", side)?,
             space_drag: CustomClickAction::new(action_set, "space_drag", side)?,
             space_fling: CustomClickAction::new(action_set, "space_fling", side)?,
+            space_boost: CustomClickAction::new(action_set, "space_boost", side)?,
             space_rotate: CustomClickAction::new(action_set, "space_rotate", side)?,
             space_reset: CustomClickAction::new(action_set, "space_reset", side)?,
             modifier_right: CustomClickAction::new(action_set, "click_modifier_right", side)?,
@@ -729,6 +752,7 @@ fn suggest_bindings(instance: &xr::Instance, hands: &mut [&mut OpenXrHandSource;
             add_custom_lr!(profile.pose, pose, hands, bindings, instance);
             add_custom_lr!(profile.haptic, haptics, hands, bindings, instance);
             add_custom_lr!(profile.scroll, scroll, hands, bindings, instance);
+            add_custom_lr!(profile.space_move, space_move, hands, bindings, instance);
 
             add_custom!(profile.click, click, hands, bindings, instance);
 
@@ -749,6 +773,8 @@ fn suggest_bindings(instance: &xr::Instance, hands: &mut [&mut OpenXrHandSource;
             add_custom!(profile.space_drag, space_drag, hands, bindings, instance);
 
             add_custom!(profile.space_fling, space_fling, hands, bindings, instance);
+
+            add_custom!(profile.space_boost, space_boost, hands, bindings, instance);
 
             add_custom!(
                 profile.space_rotate,
@@ -798,6 +824,7 @@ fn suggest_bindings(instance: &xr::Instance, hands: &mut [&mut OpenXrHandSource;
         set_threshold_for!(hands, profile.toggle_dashboard, toggle_dashboard);
         set_threshold_for!(hands, profile.space_drag, space_drag);
         set_threshold_for!(hands, profile.space_fling, space_fling);
+        set_threshold_for!(hands, profile.space_boost, space_boost);
         set_threshold_for!(hands, profile.space_rotate, space_rotate);
         set_threshold_for!(hands, profile.space_reset, space_reset);
         set_threshold_for!(hands, profile.click_modifier_right, modifier_right);
