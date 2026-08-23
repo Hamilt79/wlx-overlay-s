@@ -129,6 +129,11 @@
 ## Space gravity: multiplier for "throwing" yourself via space drag momentum
 #space_gravity_fling_strength: 1.0
 
+## Space gravity: whether you stop when you reach the floor.
+## Set to false to drift freely with nothing to land on -- the floor height and
+## ground friction below are then ignored.
+#space_gravity_floor_enabled: true
+
 ## Space gravity: floor height (Y position where gravity stops)
 #space_gravity_floor_height: 0.0
 

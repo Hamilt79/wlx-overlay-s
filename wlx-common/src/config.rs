@@ -469,6 +469,11 @@ pub struct GeneralConfig {
 	#[serde(default = "def_one")]
 	pub space_gravity_ground_friction: f32,
 
+	/// when false, space gravity never stops you at the floor: you keep drifting
+	/// past it, and ground friction is not applied
+	#[serde(default = "def_true")]
+	pub space_gravity_floor_enabled: bool,
+
 	#[serde(default)]
 	pub space_gravity_floor_height: f32,
 

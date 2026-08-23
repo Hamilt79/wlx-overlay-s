@@ -162,6 +162,11 @@ impl State {
 				1.0,
 				0.01,
 			)?;
+			options_checkbox(
+				par.mp,
+				id_space_gravity_parent,
+				SettingType::SpaceGravityFloorEnabled,
+			)?;
 			options_slider_f32(
 				par.mp,
 				id_space_gravity_parent,

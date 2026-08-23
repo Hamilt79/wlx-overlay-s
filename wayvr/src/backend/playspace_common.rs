@@ -93,13 +93,18 @@ impl SpaceGravity {
 
         self.space_pos += self.velocity * par.dt;
 
-        self.space_pos.y = self.space_pos.y.min(par.floor_height);
+        // With the floor switched off there is nothing to land on, so neither the
+        // clamp nor the ground friction that goes with it should apply -- otherwise a
+        // fling would still be caught and slowed at the old floor height.
+        if par.config.space_gravity_floor_enabled {
+            self.space_pos.y = self.space_pos.y.min(par.floor_height);
 
-        if self.space_pos.y >= par.floor_height
-        /* at floor height or below */
-        {
-            // apply ground friction
-            self.velocity *= 1.0 - par.config.space_gravity_ground_friction * par.dt * 10.0;
+            if self.space_pos.y >= par.floor_height
+            /* at floor height or below */
+            {
+                // apply ground friction
+                self.velocity *= 1.0 - par.config.space_gravity_ground_friction * par.dt * 10.0;
+            }
         }
 
         if self.velocity.length_squared() > 0.00003 {
