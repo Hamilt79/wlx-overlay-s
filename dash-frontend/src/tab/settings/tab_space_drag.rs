@@ -107,7 +107,7 @@ impl State {
 				id_common_options_parent,
 				SettingType::SpaceBoostSpeed,
 				0.0,
-				10.0,
+				100.0,
 				0.1,
 			)?;
 
