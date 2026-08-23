@@ -1,7 +1,8 @@
-use std::{collections::HashMap, rc::Rc};
+use std::rc::Rc;
 
 use wgui::{
 	assets::AssetPath,
+	color::{WguiColor, WguiColorName},
 	components::{
 		self,
 		button::{ButtonClickCallback, ComponentButton},
@@ -11,7 +12,7 @@ use wgui::{
 	globals::WguiGlobals,
 	i18n::Translation,
 	layout::{Layout, WidgetID},
-	parser::{Fetchable, ParseDocumentParams, ParserState},
+	parser::{Fetchable, ParseDocumentParams, ParserState, TemplateParams},
 	task::Tasks,
 	widget::ConstructEssentials,
 };
@@ -110,11 +111,13 @@ struct MultiSelectorParams<'a> {
 }
 
 fn mount_multi_selector(params: MultiSelectorParams) -> anyhow::Result<()> {
-	let accent_color = params.ess.layout.state.theme.accent_color;
-
 	for cell in params.cells {
 		let highlighted = cell.key == params.def_cell;
-		let color = if highlighted { Some(accent_color) } else { None };
+		let color = if highlighted {
+			Some(WguiColor::from(WguiColorName::Primary))
+		} else {
+			None
+		};
 
 		// button
 		let (_, button) = components::button::construct(
@@ -664,11 +667,11 @@ impl View {
 
 		let mut perform = |btn_num: u8, btn: &Rc<ComponentButton>| {
 			let color = if num == btn_num {
-				com.state.theme.accent_color
+				WguiColorName::Primary
 			} else {
-				com.state.theme.button_color
+				WguiColorName::BackgroundVariant
 			};
-			btn.set_color(&mut com, color);
+			btn.set_color(&mut com, color.into());
 		};
 
 		perform(0, &self.btn_sinks);
@@ -742,9 +745,9 @@ impl View {
 		let desc = &params.card.properties.device_description;
 		let disp_name = get_profile_display_name(&params.card.active_profile, params.card);
 
-		let mut par = HashMap::<Rc<str>, Rc<str>>::new();
-		par.insert("card_name".into(), desc.as_str().into());
-		par.insert("profile_name".into(), disp_name.name.as_str().into());
+		let mut par = TemplateParams::new();
+		par.insert("card_name", desc);
+		par.insert("profile_name", &disp_name.name);
 
 		let data = self
 			.state
@@ -766,11 +769,11 @@ impl View {
 	}
 
 	fn mount_device_slider(&mut self, params: MountDeviceSliderParams) -> anyhow::Result<()> {
-		let mut par = HashMap::<Rc<str>, Rc<str>>::new();
+		let mut par = TemplateParams::new();
 
 		if let Some(disp) = &params.disp {
-			par.insert("device_name".into(), disp.name.as_str().into());
-			par.insert("device_icon".into(), disp.icon_path.into());
+			par.insert("device_name", &disp.name);
+			par.insert("device_icon", disp.icon_path);
 		} else {
 			let icon_path = if params.alt_desc.contains("WiVRn") {
 				"dashboard/wivrn_head_symbolic.svg"
@@ -778,16 +781,16 @@ impl View {
 				"dashboard/binary.svg"
 			};
 
-			par.insert("device_name".into(), params.alt_desc.into());
-			par.insert("device_icon".into(), icon_path.into());
+			par.insert("device_name", &params.alt_desc);
+			par.insert("device_icon", icon_path);
 		}
 
 		par.insert(
-			"volume_icon".into(),
+			"volume_icon",
 			if params.muted {
-				"dashboard/volume_off.svg".into()
+				"dashboard/volume_off.svg"
 			} else {
-				"dashboard/volume.svg".into()
+				"dashboard/volume.svg"
 			},
 		);
 
@@ -804,7 +807,7 @@ impl View {
 		let btn_mute = data.fetch_component_as::<ComponentButton>("btn_mute")?;
 		let slider = data.fetch_component_as::<ComponentSlider>("slider")?;
 
-		slider.set_value(&mut common, params.control.on_volume_request()? / VOLUME_MULT);
+		slider.set_value_primary(&mut common, params.control.on_volume_request()? / VOLUME_MULT);
 
 		checkbox.set_checked(&mut common, params.checked);
 

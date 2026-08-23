@@ -11,7 +11,7 @@ use wgui::{
 	globals::WguiGlobals,
 	i18n::Translation,
 	layout::{Layout, WidgetID},
-	renderer_vk::text::{FontWeight, HorizontalAlign, TextShadow, TextStyle, custom_glyph::CustomGlyphData},
+	renderer_vk::text::{FontWeight, HorizontalAlign, TextStyle, WguiTextShadow, custom_glyph::CustomGlyphData},
 	taffy::{
 		self, AlignItems, AlignSelf, JustifyContent, JustifySelf,
 		prelude::{auto, length, percent},
@@ -61,12 +61,8 @@ const GAME_COVER_SIZE_X: f32 = 140.0;
 const GAME_COVER_SIZE_Y: f32 = 210.0;
 
 impl View {
-	async fn request_cover_image(
-		executor: AsyncExecutor,
-		manifest: steam_utils::AppManifest,
-		on_loaded: Box<dyn FnOnce(CoverArt)>,
-	) {
-		let cover_art = match cached_fetcher::request_image(executor, manifest.app_id.clone()).await {
+	async fn request_cover_image(manifest: steam_utils::AppManifest, on_loaded: Box<dyn FnOnce(CoverArt)>) {
+		let cover_art = match cached_fetcher::request_cover_art(manifest.app_id.clone()).await {
 			Ok(cover_art) => cover_art,
 			Err(e) => {
 				log::error!("request_cover_image failed: {:?}", e);
@@ -79,7 +75,7 @@ impl View {
 
 	fn mount_image(&self, layout: &mut Layout, glyph: &CustomGlyphData) -> anyhow::Result<()> {
 		let image = WidgetImage::create(WidgetImageParams {
-			round: WLength::Units(10.0),
+			round: WLength::Units(6.0),
 			glyph_data: Some(glyph.clone()),
 			..Default::default()
 		});
@@ -89,8 +85,8 @@ impl View {
 			image,
 			taffy::Style {
 				size: taffy::Size {
-					width: percent(1.0),
-					height: percent(1.0),
+					width: percent(1.0_f32),
+					height: percent(1.0_f32),
 				},
 				..Default::default()
 			},
@@ -107,16 +103,17 @@ impl View {
 				content: Translation::from_raw_text(text),
 				style: TextStyle {
 					weight: Some(FontWeight::Bold),
+					color: Some(drawing::Color::new(1.0, 1.0, 1.0, 1.0).into()),
 					wrap: true,
 					size: Some(16.0),
 					align: Some(HorizontalAlign::Center),
-					shadow: Some(TextShadow {
-						color: drawing::Color::new(0.0, 0.0, 0.0, 1.0),
-						x: 2.0,
-						y: 2.0,
+					shadow: Some(WguiTextShadow {
+						color: drawing::Color::new(0.0, 0.0, 0.0, 1.0).into(),
+						..Default::default()
 					}),
 					..Default::default()
 				},
+				..Default::default()
 			},
 		);
 
@@ -125,10 +122,10 @@ impl View {
 			label,
 			taffy::Style {
 				position: taffy::Position::Absolute,
-				align_self: Some(AlignSelf::Baseline),
-				justify_self: Some(JustifySelf::Center),
+				align_self: Some(AlignSelf::BASELINE),
+				justify_self: Some(JustifySelf::CENTER),
 				margin: taffy::Rect {
-					top: length(32.0),
+					top: length(32.0_f32),
 					bottom: auto(),
 					left: auto(),
 					right: auto(),
@@ -173,10 +170,10 @@ impl View {
 		let (widget_button, button) = components::button::construct(
 			params.ess,
 			components::button::Params {
-				color: Some(drawing::Color::new(1.0, 1.0, 1.0, 0.0)),
-				border_color: Some(BORDER_COLOR_DEFAULT),
-				hover_border_color: Some(BORDER_COLOR_HOVERED),
-				round: WLength::Units(12.0),
+				color: Some(drawing::Color::new(1.0, 1.0, 1.0, 0.0).into()),
+				border_color: Some(BORDER_COLOR_DEFAULT.into()),
+				hover_border_color: Some(BORDER_COLOR_HOVERED.into()),
+				round: WLength::Units(8.0),
 				border: 2.0,
 				tooltip: Some(TooltipInfo {
 					side: TooltipSide::Bottom,
@@ -184,8 +181,8 @@ impl View {
 				}),
 				style: taffy::Style {
 					position: taffy::Position::Relative,
-					align_items: Some(taffy::AlignItems::Center),
-					justify_content: Some(taffy::JustifyContent::Center),
+					align_items: Some(AlignItems::CENTER),
+					justify_content: Some(JustifyContent::CENTER),
 					size: taffy::Size {
 						width: length(GAME_COVER_SIZE_X * params.scale),
 						height: length(GAME_COVER_SIZE_Y * params.scale),
@@ -202,21 +199,21 @@ impl View {
 			taffy::Style {
 				position: taffy::Position::Absolute,
 				size: taffy::Size {
-					width: percent(1.0),
-					height: percent(1.0),
+					width: percent(1.0_f32),
+					height: percent(1.0_f32),
 				},
-				padding: taffy::Rect::length(2.0),
-				align_items: Some(AlignItems::Center),
-				justify_content: Some(JustifyContent::Center),
+				padding: taffy::Rect::length(2.0_f32),
+				align_items: Some(AlignItems::CENTER),
+				justify_content: Some(JustifyContent::CENTER),
 				..Default::default()
 			},
 		)?;
 
-		let rect_gradient = |color: drawing::Color, color2: drawing::Color| {
+		let rect_gradient = |color: drawing::Color, color2: drawing::Color, round: f32| {
 			rectangle::WidgetRectangle::create(rectangle::WidgetRectangleParams {
-				color,
-				color2,
-				round: WLength::Units(12.0),
+				color: color.into(),
+				color2: color2.into(),
+				round: WLength::Units(round),
 				gradient: GradientMode::Vertical,
 				..Default::default()
 			})
@@ -226,7 +223,7 @@ impl View {
 			position: taffy::Position::Absolute,
 			align_self: Some(align_self),
 			size: taffy::Size {
-				width: percent(1.0),
+				width: percent(1.0_f32),
 				height: percent(height),
 			},
 			..Default::default()
@@ -237,9 +234,10 @@ impl View {
 			widget_button.id,
 			rect_gradient(
 				drawing::Color::new(1.0, 1.0, 1.0, 0.2),
-				drawing::Color::new(1.0, 1.0, 1.0, 0.02),
+				drawing::Color::new(1.0, 1.0, 1.0, 0.01),
+				8.0,
 			),
-			rect_gradient_style(taffy::AlignSelf::Baseline, 0.05),
+			rect_gradient_style(taffy::AlignSelf::BASELINE, 0.05),
 		)?;
 
 		// not optimal, this forces us to create a new pass for every created cover art just to overlay various rectangles at the top of the image cover art
@@ -251,8 +249,9 @@ impl View {
 			rect_gradient(
 				drawing::Color::new(1.0, 1.0, 1.0, 0.15),
 				drawing::Color::new(1.0, 1.0, 1.0, 0.0),
+				8.0,
 			),
-			rect_gradient_style(taffy::AlignSelf::Baseline, 0.5),
+			rect_gradient_style(taffy::AlignSelf::BASELINE, 0.5),
 		)?;
 
 		// bottom black gradient
@@ -261,8 +260,9 @@ impl View {
 			rect_gradient(
 				drawing::Color::new(0.0, 0.0, 0.0, 0.0),
 				drawing::Color::new(0.0, 0.0, 0.0, 0.25),
+				8.0,
 			),
-			rect_gradient_style(taffy::AlignSelf::End, 0.5),
+			rect_gradient_style(taffy::AlignSelf::END, 0.5),
 		)?;
 
 		// bottom shadow
@@ -271,8 +271,9 @@ impl View {
 			rect_gradient(
 				drawing::Color::new(0.0, 0.0, 0.0, 0.1),
 				drawing::Color::new(0.0, 0.0, 0.0, 0.9),
+				8.0,
 			),
-			rect_gradient_style(taffy::AlignSelf::End, 0.05),
+			rect_gradient_style(taffy::AlignSelf::END, 0.05),
 		)?;
 
 		let id_loading = wgui_simple::create_loading(wgui_simple::CreateLoadingParams {
@@ -285,7 +286,6 @@ impl View {
 		params
 			.executor
 			.spawn(View::request_cover_image(
-				params.executor.clone(),
 				params.manifest.clone(),
 				Box::new(params.on_loaded),
 			))

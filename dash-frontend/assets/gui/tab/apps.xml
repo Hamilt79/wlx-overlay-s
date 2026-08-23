@@ -1,14 +1,14 @@
 <layout>
-  <include src="../theme.xml" />
+  <include src="../t_group_box.xml" />
 
+  <!-- tooltip, src, src_ext, name -->
   <template name="AppEntry">
     <Button
-      id="button" width="116" max_width="140" min_height="100" flex_grow="1"
+      id="button" tooltip_side="bottom" tooltip="${tooltip}" width="116" max_width="140" min_height="100" flex_grow="1"
       flex_direction="column" overflow="visible" align_items="center" justify_content="center" gap="4"
-      color="#3385FF10"
     >
       <div>
-        <sprite src="${src}" src_ext="${src_ext}" width="64" height="64" />
+        <sprite src="${src}" src_ext="${src_ext}" width="64" height="64" color="#FFFFFF" parent_color="ignore" />
       </div>
       <div align_items="center" justify_content="center">
         <label width="116" weight="bold" text="${name}" size="12" wrap="1" align="center" padding_left="16" padding_right="16" />
@@ -17,9 +17,9 @@
   </template>
 
   <template name="CategoryText">
-    <rectangle width="100%" flex_direction="column" round="8" border="2" gradient="vertical" color2="#4477FF09" color="#5588FF10" border_color="#FFFFFF00">
+    <rectangle width="100%" flex_direction="column" round="8" border="2" gradient="vertical" color2="background" color="background_variant" border_color="outline">
       <label margin="8" text="${text}" weight="bold" size="22" />
-      <rectangle height="2" color="~color_accent" margin_left="4" margin_right="4" />
+      <rectangle height="2" color="primary" margin_left="4" margin_right="4" />
     </rectangle>
   </template>
 
@@ -39,6 +39,15 @@
       </rectangle>
     </div>
     -->
+    <rectangle macro="group_box">
+      <div align_items="center" gap="8">
+        <sprite src_builtin="dashboard/heart_plus.svg" color="primary"  min_width="24" min_height="24"/>
+        <label translation="PINNED_APPS"/>
+      </div>
+      <div id="pinned_apps_parent" flex_direction="row" flex_wrap="wrap" gap="4">
+        <!-- filled-in at runtime -->
+      </div>
+    </rectangle>
     <div
       id="app_list_parent"
       flex_direction="row"

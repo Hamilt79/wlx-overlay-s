@@ -16,7 +16,7 @@ env:
   
 jobs:
   make_release:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: ./wayvr
@@ -30,6 +30,9 @@ jobs:
       - name: Cargo Build
         run: |
           ../.github/workflows/scripts/appimage_build_wlx.sh
+      - name: Build xwayland-satellite
+        run: |
+          ../.github/workflows/scripts/appimage_build_satellite.sh
       - name: Package AppImage
         run: |
           ../.github/workflows/scripts/appimage_package.sh

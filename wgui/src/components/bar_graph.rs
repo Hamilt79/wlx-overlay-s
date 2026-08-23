@@ -111,7 +111,7 @@ pub fn construct(
 	mut params: Params,
 ) -> anyhow::Result<(WidgetPair, Rc<ComponentBarGraph>)> {
 	params.style.flex_direction = FlexDirection::Row;
-	params.style.gap = length(4.0);
+	params.style.gap = length(4.0_f32);
 
 	// override style
 	let (root, _) = ess.layout.add_child(ess.parent, WidgetDiv::create(), params.style)?;
@@ -120,11 +120,11 @@ pub fn construct(
 		root.id,
 		WidgetDiv::create(),
 		taffy::Style {
-			justify_content: Some(JustifyContent::SpaceBetween),
+			justify_content: Some(JustifyContent::SPACE_BETWEEN),
 			flex_direction: FlexDirection::Column,
 			size: taffy::Size {
 				width: auto(),
-				height: percent(1.0),
+				height: percent(1.0_f32),
 			},
 			..Default::default()
 		},
@@ -134,17 +134,17 @@ pub fn construct(
 		root.id,
 		WidgetRectangle::create(WidgetRectangleParams {
 			border: 2.0,
-			border_color: drawing::Color::new(1.0, 1.0, 1.0, 0.5),
+			border_color: drawing::Color::new(1.0, 1.0, 1.0, 0.5).into(),
 			round: WLength::Units(3.0),
 			gradient: GradientMode::Vertical,
-			color: drawing::Color::new(0.0, 0.0, 0.0, 0.6),
+			color: drawing::Color::new(0.0, 0.0, 0.0, 0.6).into(),
 			..Default::default()
 		}),
 		taffy::Style {
 			position: taffy::Position::Relative,
 			size: taffy::Size {
-				width: percent(1.0),
-				height: percent(1.0),
+				width: percent(1.0_f32),
+				height: percent(1.0_f32),
 			},
 			..Default::default()
 		},
@@ -194,8 +194,8 @@ pub fn construct(
 		}),
 		taffy::Style {
 			size: taffy::Size {
-				width: percent(1.0),
-				height: percent(1.0),
+				width: percent(1.0_f32),
+				height: percent(1.0_f32),
 			},
 			..Default::default()
 		},

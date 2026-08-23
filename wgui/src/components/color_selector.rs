@@ -46,6 +46,7 @@ struct PopupState {
 	id_rect_color: WidgetID,
 }
 
+#[allow(clippy::struct_field_names)]
 struct State {
 	color: drawing::Color,
 	self_ref: Weak<ComponentColorSelector>,
@@ -83,19 +84,22 @@ impl ComponentTrait for ComponentColorSelector {
 	fn refresh(&self, data: &mut RefreshData) {
 		let mut state = self.state.borrow_mut();
 
-		if let Some(wants_open) = state.wants_open.take() {
-			if let Err(e) = self.open(data.layout, &mut state, wants_open.position) {
-				log::error!("{:?}", e);
-				debug_assert!(false);
-			}
+		if let Some(wants_open) = state.wants_open.take()
+			&& let Err(e) = self.open(data.layout, &mut state, wants_open.position)
+		{
+			log::error!("{e:?}");
+			debug_assert!(false);
 		}
 
 		self.data.button.set_text(
 			&mut data.layout.common(),
-			Translation::from_raw_text_string(format!("{}", state.color.to_hex_rgb())),
+			Translation::from_raw_text_string(state.color.to_hex_rgb()),
 		);
 
-		self.data.button.set_color(&mut data.layout.common(), state.color);
+		self
+			.data
+			.button
+			.set_color(&mut data.layout.common(), state.color.into());
 	}
 }
 
@@ -111,7 +115,7 @@ fn set_color_internal(state: &mut State, common: &mut CallbackDataCommon, color:
 	}
 
 	if let Some(on_changed) = &state.on_changed {
-		on_changed(common, ColorSelectorChangedEvent { color })
+		on_changed(common, ColorSelectorChangedEvent { color });
 	}
 
 	state.color = color;
@@ -148,7 +152,7 @@ impl ComponentColorSelector {
 		let id_content = self.window.get_content().id;
 
 		let parser_state = parser::parse_from_assets(
-			&mut ParseDocumentParams {
+			&ParseDocumentParams {
 				globals: layout.state.globals.clone(),
 				path: AssetPath::WguiInternal("wgui/color_selector.xml"),
 				extra: Default::default(),
@@ -163,9 +167,9 @@ impl ComponentColorSelector {
 
 		{
 			let mut common = layout.common();
-			slider_r.set_value(&mut common, state.color.r * 255.0);
-			slider_g.set_value(&mut common, state.color.g * 255.0);
-			slider_b.set_value(&mut common, state.color.b * 255.0);
+			slider_r.set_value_primary(&mut common, state.color.r * 255.0);
+			slider_g.set_value_primary(&mut common, state.color.g * 255.0);
+			slider_b.set_value_primary(&mut common, state.color.b * 255.0);
 		}
 
 		slider_r.on_value_changed(self.gen_slider_callback(ColorIndex::Red));
@@ -209,7 +213,7 @@ impl ComponentColorSelector {
 				.widgets
 				.get_as::<WidgetRectangle>(popup_state.id_rect_color)
 			{
-				rect.set_color(common, new_color);
+				rect.set_color(common, new_color.into());
 			}
 			set_color_internal(&mut state, common, new_color);
 		})
@@ -239,10 +243,10 @@ pub fn construct(
 	let (widget_button, button) = button::construct(
 		ess,
 		button::Params {
-			color: Some(params.color),
+			color: Some(params.color.into()),
 			round: WLength::Percent(1.0),
 			border: 2.0,
-			border_color: Some(drawing::Color::new(0.0, 0.0, 0.0, 1.0)),
+			border_color: Some(drawing::Color::new(0.0, 0.0, 0.0, 1.0).into()),
 			style,
 			..Default::default()
 		},

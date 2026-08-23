@@ -11,6 +11,7 @@ use slotmap::{DenseSlotMap, new_key_type};
 use crate::{
 	animation::{self, Animation},
 	components::{ComponentTrait, ComponentWeak},
+	drawing::Boundary,
 	globals,
 	i18n::I18n,
 	layout::{LayoutDispatchFunc, LayoutState, LayoutTask, WidgetID},
@@ -18,6 +19,19 @@ use crate::{
 	stack::{ScissorStack, Transform, TransformStack},
 	widget::{EventResult, WidgetData, WidgetObj},
 };
+
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub struct DeviceBitmask(pub u8);
+
+impl DeviceBitmask {
+	pub fn from_index(index: usize) -> Self {
+		debug_assert!(index < 8);
+		Self(1u8 << index)
+	}
+	pub fn to_index(self) -> Option<usize> {
+		(self.0 != 0).then(|| self.0.trailing_zeros() as usize)
+	}
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum MouseButtonIndex {
@@ -30,28 +44,28 @@ pub enum MouseButtonIndex {
 pub struct MouseButtonEvent {
 	pub index: MouseButtonIndex,
 	pub pos: Vec2,
-	pub device: usize,
+	pub device: DeviceBitmask,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct MousePosition {
 	pub pos: Vec2,
-	pub device: usize,
+	pub device: DeviceBitmask,
 }
 
 pub struct MouseLeaveEvent {
-	pub device: usize,
+	pub device: DeviceBitmask,
 }
 
 pub struct MouseMotionEvent {
 	pub pos: Vec2,
-	pub device: usize,
+	pub device: DeviceBitmask,
 }
 
 pub struct MouseWheelEvent {
 	pub pos: Vec2,   /* mouse position */
 	pub delta: Vec2, /* wheel delta */
-	pub device: usize,
+	pub device: DeviceBitmask,
 }
 
 #[derive(Clone)]
@@ -70,23 +84,26 @@ pub enum Event {
 	MouseMotion(MouseMotionEvent),
 	MouseUp(MouseButtonEvent),
 	MouseWheel(MouseWheelEvent),
+	MouseCancel, // Called if the user started scrolling by swiping above the button, to cancel all currently pressed buttons (prevent clicks)
 	TextInput(TextInputEvent),
 }
 
 impl Event {
-	fn test_transform_pos(transform: &Transform, pos: Vec2) -> bool {
+	pub fn test_transform_pos(transform: &Transform, pos: Vec2) -> bool {
 		pos.x >= transform.abs_pos.x
 			&& pos.x < transform.abs_pos.x + transform.visual_dim.x
 			&& pos.y >= transform.abs_pos.y
 			&& pos.y < transform.abs_pos.y + transform.visual_dim.y
 	}
 
-	pub fn test_mouse_within_transform(&self, transform: &Transform) -> bool {
+	pub fn test_mouse_within_transform(&self, transform: &Transform, scissor_boundary: &Boundary) -> bool {
 		match self {
-			Self::MouseDown(evt) => Self::test_transform_pos(transform, evt.pos),
-			Self::MouseMotion(evt) => Self::test_transform_pos(transform, evt.pos),
-			Self::MouseUp(evt) => Self::test_transform_pos(transform, evt.pos),
-			Self::MouseWheel(evt) => Self::test_transform_pos(transform, evt.pos),
+			Self::MouseDown(evt) => Self::test_transform_pos(transform, evt.pos) && scissor_boundary.contains_point(evt.pos),
+			Self::MouseMotion(evt) => {
+				Self::test_transform_pos(transform, evt.pos) && scissor_boundary.contains_point(evt.pos)
+			}
+			Self::MouseUp(evt) => Self::test_transform_pos(transform, evt.pos) && scissor_boundary.contains_point(evt.pos),
+			Self::MouseWheel(evt) => Self::test_transform_pos(transform, evt.pos) && scissor_boundary.contains_point(evt.pos),
 			_ => false,
 		}
 	}
@@ -95,6 +112,7 @@ impl Event {
 pub enum StyleSetRequest {
 	Display(taffy::Display),
 	Margin(taffy::Rect<taffy::LengthPercentageAuto>),
+	Padding(taffy::Rect<taffy::LengthPercentage>),
 	Width(taffy::Dimension),
 	Height(taffy::Dimension),
 	Size(taffy::Size<taffy::Dimension>),
@@ -106,6 +124,7 @@ pub struct EventAlterables {
 	pub dirty_widgets: Vec<WidgetID>,
 	pub components_to_refresh_once: Vec<ComponentWeak>,
 	pub style_set_requests: Vec<(WidgetID, StyleSetRequest)>,
+	pub global_events_to_emit: Vec<Event>,
 	pub animations: Vec<animation::Animation>,
 	pub widgets_to_tick: HashSet<WidgetID>, // widgets which needs to be ticked in the next `Layout::update()` fn
 	pub transform_stack: TransformStack,
@@ -125,6 +144,17 @@ impl EventAlterables {
 		self.style_set_requests.push((widget_id, request));
 	}
 
+	pub fn set_widget_visible(&mut self, widget_id: WidgetID, visible: bool) {
+		self.style_set_requests.push((
+			widget_id,
+			StyleSetRequest::Display(if visible {
+				taffy::Display::Flex
+			} else {
+				taffy::Display::None
+			}),
+		));
+	}
+
 	pub fn mark_dirty(&mut self, widget_id: WidgetID) {
 		self.dirty_widgets.push(widget_id);
 	}
@@ -132,6 +162,10 @@ impl EventAlterables {
 	pub fn mark_dirty_and_redraw(&mut self, widget_id: WidgetID) {
 		self.mark_dirty(widget_id);
 		self.mark_redraw();
+	}
+
+	pub fn emit_global_event(&mut self, event: Event) {
+		self.global_events_to_emit.push(event);
 	}
 
 	pub fn mark_tick(&mut self, widget_id: WidgetID) {
@@ -224,9 +258,10 @@ impl CallbackMetadata {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventListenerKind {
 	MousePress,
-	MouseRelease,
-	MouseEnter,
 	MouseMotion,
+	MouseRelease,
+	MouseCancel,
+	MouseEnter,
 	MouseLeave,
 	TextInput,
 	InternalStateChange,

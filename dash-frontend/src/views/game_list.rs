@@ -70,17 +70,13 @@ pub struct View {
 
 impl ViewTrait for View {
 	fn update(&mut self, par: &mut ViewUpdateParams) -> anyhow::Result<()> {
-		loop {
-			let tasks = self.tasks.drain();
-			if tasks.is_empty() {
-				break;
-			}
-			for task in tasks {
+		while !self.tasks.is_empty() {
+			for task in self.tasks.drain() {
 				match task {
 					Task::LoadManifests => self.load_manifests(),
-					Task::FillPage(page_idx) => self.fill_page(&mut par.layout, &mut par.executor, page_idx)?,
+					Task::FillPage(page_idx) => self.fill_page(par.layout, par.executor, page_idx)?,
 					Task::AppManifestClicked(manifest) => self.action_app_manifest_clicked(manifest)?,
-					Task::SetCoverArt(app_id, cover_art) => self.set_cover_art(&mut par.layout, app_id, cover_art),
+					Task::SetCoverArt(app_id, cover_art) => self.set_cover_art(par.layout, app_id, cover_art),
 					Task::PrevPage => self.page_prev(),
 					Task::NextPage => self.page_next(),
 				}

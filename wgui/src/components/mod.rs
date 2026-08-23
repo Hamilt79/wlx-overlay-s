@@ -18,8 +18,16 @@ pub mod slider;
 pub mod tabs;
 pub mod tooltip;
 
+#[cfg(feature = "video")]
+pub mod video;
+
 pub struct RefreshData<'a> {
 	pub layout: &'a mut Layout,
+}
+
+pub struct DestroyData<'a> {
+	pub layout: &'a mut Layout,
+	pub destroy_widgets: &'a mut Vec<WidgetID>,
 }
 
 pub struct FocusChangeData<'a> {
@@ -46,6 +54,7 @@ pub trait ComponentTrait: AnyTrait {
 	fn base_mut(&mut self) -> &mut ComponentBase;
 	fn refresh(&self, data: &mut RefreshData);
 	fn on_focus_change(&self, _data: &mut FocusChangeData) {}
+	fn destroy(&self, _data: &mut DestroyData) {}
 }
 
 #[derive(Clone)]

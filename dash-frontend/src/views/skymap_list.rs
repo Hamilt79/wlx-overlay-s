@@ -58,18 +58,14 @@ impl ViewTrait for View {
 		self.popup_remote_skymap_list.update(par)?;
 		self.popup_dialog_box.update(par)?;
 
-		loop {
-			let tasks = self.tasks.drain();
-			if tasks.is_empty() {
-				break;
-			}
-			for task in tasks {
+		while !self.tasks.is_empty() {
+			for task in self.tasks.drain() {
 				match task {
 					Task::DownloadSkymaps => {
-						self.download_skymaps(&par.executor)?;
+						self.download_skymaps(par.executor)?;
 					}
 					Task::Refresh => {
-						self.refresh(&mut par.layout)?;
+						self.refresh(par.layout)?;
 					}
 					Task::ShowSkymapResolutionSelector(entry) => {
 						self.show_skymap_resolution_selector(entry);
@@ -236,10 +232,10 @@ impl View {
 			})?;
 
 			// load preview image
-			if let Ok(data) = std::fs::read(skymaps_root.join(&entry.files.preview)) {
-				if let Ok(glyph_data) = CustomGlyphData::from_bytes_raster(&self.globals, &entry.files.preview, &data) {
-					view.set_image(layout, Some(glyph_data))?;
-				}
+			if let Ok(data) = std::fs::read(skymaps_root.join(&entry.files.preview))
+				&& let Ok(glyph_data) = CustomGlyphData::from_bytes_raster(&self.globals, &entry.files.preview, &data)
+			{
+				view.set_image(layout, Some(glyph_data))?;
 			}
 
 			self.cells.push(Cell { view });
@@ -265,5 +261,6 @@ pub fn mount_popup(frontend_tasks: FrontendTasks, globals: WguiGlobals, popup: P
 				popup.set_view(data.handle, view, None);
 				Ok(popup.get_close_callback(data.layout))
 			}),
+			Default::default(), /* extra */
 		)));
 }

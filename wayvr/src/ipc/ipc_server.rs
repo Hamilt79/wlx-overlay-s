@@ -1,5 +1,7 @@
+use crate::backend::wayvr::process::ProcessHandle;
 use crate::backend::wayvr::{self, WvrServerState};
 
+use crate::subsystem::input::{HidWrapper, InputFocus};
 use crate::{
     backend::input::InputState,
     ipc::{event_queue::SyncEventQueue, signal::WayVRSignal},
@@ -9,6 +11,7 @@ use glam::Vec3A;
 use interprocess::local_socket::{self, ToNsName, traits::Listener};
 use smallvec::SmallVec;
 use std::io::{Read, Write};
+use wayvr_ipc::packet_client::HandsfreeParams;
 use wayvr_ipc::{
     ipc::{self},
     packet_client::{self, PacketClient},
@@ -42,35 +45,40 @@ pub fn send_packet(conn: &mut local_socket::Stream, data: &[u8]) -> anyhow::Resu
     Ok(())
 }
 
-fn read_check(expected_size: u32, res: std::io::Result<usize>) -> bool {
+fn read_check(expected_size: u32, res: std::io::Result<usize>) -> anyhow::Result<bool> {
     match res {
         Ok(count) => {
             if count == 0 {
-                return false;
+                anyhow::bail!("End of stream");
             }
             if count as u32 == expected_size {
-                true // read succeeded
+                Ok(true) // read succeeded
             } else {
                 log::error!("count {count} is not {expected_size}");
-                false
+                Ok(false)
             }
         }
-        Err(_e) => {
-            //log::error!("failed to get packet size: {}", e);
-            false
-        }
+        Err(e) => match e.kind() {
+            std::io::ErrorKind::WouldBlock => {
+                // no incoming data (this socket is non-blocking), try again later
+                Ok(false)
+            }
+            _ => {
+                anyhow::bail!("Connection error: {e:?}");
+            }
+        },
     }
 }
 
 type Payload = SmallVec<[u8; 64]>;
 
-fn read_payload(conn: &mut local_socket::Stream, size: u32) -> Option<Payload> {
+fn read_payload(conn: &mut local_socket::Stream, size: u32) -> anyhow::Result<Option<Payload>> {
     let mut payload = Payload::new();
     payload.resize(size as usize, 0);
-    if read_check(size, conn.read(&mut payload)) {
-        Some(payload)
+    if read_check(size, conn.read(&mut payload))? {
+        Ok(Some(payload))
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -80,6 +88,7 @@ pub struct TickParams<'a> {
     pub tasks: &'a mut Vec<wayvr::TickTask>,
     pub signals: &'a SyncEventQueue<WayVRSignal>,
     pub input_state: &'a InputState,
+    pub hid_wrapper: &'a mut HidWrapper,
 }
 
 pub fn gen_args_vec(input: &str) -> Vec<&str> {
@@ -172,7 +181,7 @@ impl Connection {
                         pos: to_arr(&params.input_state.pointers[0].raw_pose.translation),
                     },
                     right: WlxInputStatePointer {
-                        pos: to_arr(&params.input_state.pointers[0].raw_pose.translation),
+                        pos: to_arr(&params.input_state.pointers[1].raw_pose.translation),
                     },
                 },
             )),
@@ -200,8 +209,8 @@ impl Connection {
                 .windows
                 .iter()
                 .map(|(handle, win)| packet_server::WvrWindow {
-                    handle: wayvr::window::WindowHandle::as_packet(&handle),
-                    process_handle: wayvr::process::ProcessHandle::as_packet(&win.process),
+                    handle: wayvr::window::WindowHandle::as_packet(handle),
+                    process_handle: wayvr::process::ProcessHandle::as_packet(win.process),
                     size_x: win.size_x,
                     size_y: win.size_y,
                     visible: win.visible,
@@ -215,13 +224,12 @@ impl Connection {
         handle: packet_server::WvrWindowHandle,
         visible: bool,
     ) {
-        if let Some(window) = params
-            .wvr_server
-            .wm
-            .windows
-            .get_mut(&wayvr::window::WindowHandle::from_packet(handle))
-        {
+        let window_handle = wayvr::window::WindowHandle::from_packet(handle);
+        if let Some(window) = params.wvr_server.wm.windows.get_mut(window_handle) {
             window.visible = visible;
+            params
+                .signals
+                .send(WayVRSignal::WindowVisibilityChanged(window_handle, visible));
         }
     }
 
@@ -246,7 +254,7 @@ impl Connection {
             packet_params.userdata,
         );
 
-        let res = res.map(|r| r.as_packet()).map_err(|e| e.to_string());
+        let res = res.map(ProcessHandle::as_packet).map_err(|e| e.to_string());
 
         send_packet(
             &mut self.conn,
@@ -264,19 +272,8 @@ impl Connection {
         let list: Vec<packet_server::WvrProcess> = params
             .wvr_server
             .processes
-            .vec
             .iter()
-            .enumerate()
-            .filter_map(|(idx, opt_cell)| {
-                let Some(cell) = opt_cell else {
-                    return None;
-                };
-                let process = &cell.obj;
-                Some(process.to_packet(wayvr::process::ProcessHandle::new(
-                    idx as u32,
-                    cell.generation,
-                )))
-            })
+            .map(|(handle, process)| process.to_packet(handle))
             .collect();
 
         send_packet(
@@ -298,7 +295,7 @@ impl Connection {
         use crate::backend::wayvr::process::KillSignal;
 
         let native_handle = &wayvr::process::ProcessHandle::from_packet(process_handle);
-        let process = params.wvr_server.processes.get_mut(native_handle);
+        let process = params.wvr_server.processes.get_mut(*native_handle);
 
         let Some(process) = process else {
             return;
@@ -317,7 +314,7 @@ impl Connection {
         let process = params
             .wvr_server
             .processes
-            .get(native_handle)
+            .get(*native_handle)
             .map(|process| process.to_packet(*native_handle));
 
         send_packet(
@@ -326,6 +323,17 @@ impl Connection {
         )?;
 
         Ok(())
+    }
+
+    fn handle_wvr_input_capture(params: &mut TickParams, grab: bool) {
+        let val = if grab {
+            InputFocus::WayVR
+        } else {
+            InputFocus::PhysicalScreen
+        };
+        params
+            .hid_wrapper
+            .set_input_focus(Some(params.wvr_server), val);
     }
 
     fn handle_wlx_device_haptics(
@@ -349,6 +357,10 @@ impl Connection {
 
     fn handle_wlx_switch_set(params: &mut TickParams, set: Option<usize>) {
         params.signals.send(WayVRSignal::SwitchSet(set));
+    }
+
+    fn handle_wlx_handsfree(params: &mut TickParams, payload: HandsfreeParams) {
+        params.signals.send(WayVRSignal::Handsfree(payload));
     }
 
     fn handle_wlx_panel(
@@ -416,6 +428,9 @@ impl Connection {
             PacketClient::WvrProcessTerminate(process_handle) => {
                 Self::handle_wvr_process_terminate(params, process_handle);
             }
+            PacketClient::WvrInputCapture(grab) => {
+                Self::handle_wvr_input_capture(params, grab);
+            }
             PacketClient::WlxDeviceHaptics(device, haptics_params) => {
                 Self::handle_wlx_device_haptics(params, device, haptics_params);
             }
@@ -428,41 +443,41 @@ impl Connection {
             PacketClient::WlxModifyPanel(custom_params) => {
                 Self::handle_wlx_panel(params, custom_params);
             }
+            PacketClient::WlxHandsfree(payload) => {
+                Self::handle_wlx_handsfree(params, payload);
+            }
         }
 
         Ok(())
     }
 
-    fn process_check_payload(&mut self, params: &mut TickParams, payload: Payload) -> bool {
-        log::debug!("payload size {}", payload.len());
-
+    fn process_check_payload(
+        &mut self,
+        params: &mut TickParams,
+        payload: Payload,
+    ) -> anyhow::Result<()> {
         if let Err(e) = self.process_payload(params, payload) {
-            log::error!("Invalid payload from the client, closing connection: {e}");
             // send also error message directly to the client before disconnecting
             self.kill(format!("{e}").as_str());
-            false
-        } else {
-            true
+            anyhow::bail!("Invalid payload from the client, closing connection: {e}");
         }
+        Ok(())
     }
 
-    fn read_packet(&mut self, params: &mut TickParams) -> bool {
+    fn read_packet(&mut self, params: &mut TickParams) -> anyhow::Result<bool> {
         if let Some(payload_size) = self.next_packet {
-            let Some(payload) = read_payload(&mut self.conn, payload_size) else {
-                // still failed to read payload, try in next tick
-                return false;
+            let Some(payload) = read_payload(&mut self.conn, payload_size)? else {
+                // still failed to read payload, try in the next tick
+                return Ok(false);
             };
 
-            if !self.process_check_payload(params, payload) {
-                return false;
-            }
-
+            self.process_check_payload(params, payload)?;
             self.next_packet = None;
         }
 
         let mut buf_packet_header: [u8; 4] = [0; 4];
-        if !read_check(4, self.conn.read(&mut buf_packet_header)) {
-            return false;
+        if !read_check(4, self.conn.read(&mut buf_packet_header))? {
+            return Ok(false);
         }
 
         let payload_size = u32::from_be_bytes(buf_packet_header[0..4].try_into().unwrap()); // 0-3 bytes (u32 size)
@@ -475,30 +490,43 @@ impl Connection {
                 "Client sent a packet header with the size over {size_limit} bytes, closing connection."
             );
             self.kill("Too big packet received (over 128 KiB)");
-            return false;
+            return Ok(false);
         }
 
-        let Some(payload) = read_payload(&mut self.conn, payload_size) else {
+        let Some(payload) = read_payload(&mut self.conn, payload_size)? else {
             // failed to read payload, try in next tick
             self.next_packet = Some(payload_size);
-            return false;
+            return Ok(false);
         };
 
-        if !self.process_check_payload(params, payload) {
-            return false;
-        }
+        self.process_check_payload(params, payload)?;
 
-        true
+        Ok(true)
     }
 
     fn tick(&mut self, params: &mut TickParams) {
-        while self.read_packet(params) {}
+        loop {
+            match self.read_packet(params) {
+                Ok(loop_further) => {
+                    if !loop_further {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    log::debug!("Disconnecting client: {e:?}");
+                    self.alive = false;
+                    break;
+                }
+            }
+        }
     }
 }
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        log::info!("Connection closed");
+        if let Some(auth) = &self.auth {
+            log::info!("IPC: Client \"{}\" disconnected.", auth.client_name);
+        }
     }
 }
 
@@ -547,13 +575,5 @@ impl WayVRServer {
     pub fn tick(&mut self, params: &mut TickParams) {
         self.accept_connections();
         self.tick_connections(params);
-    }
-
-    pub fn broadcast(&mut self, packet: packet_server::PacketServer) {
-        for connection in &mut self.connections {
-            if let Err(e) = send_packet(&mut connection.conn, &ipc::data_encode(&packet)) {
-                log::error!("failed to broadcast packet: {e:?}");
-            }
-        }
     }
 }

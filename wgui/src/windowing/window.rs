@@ -119,41 +119,41 @@ impl WguiWindow {
 				taffy::Rect {
 					left: length(params.position.x - window_padding),
 					top: length(params.position.y - header_height - window_padding),
-					bottom: length(0.0),
-					right: length(0.0),
+					bottom: length(0.0_f32),
+					right: length(0.0_f32),
 				},
-				taffy::JustifyContent::Start, // x start
-				taffy::AlignItems::Start,     // y start
+				taffy::JustifyContent::START, // x start
+				taffy::AlignItems::START,     // y start
 			),
 			WguiWindowPlacement::BottomLeft => (
 				taffy::Rect {
 					left: length(params.position.x - window_padding),
-					top: length(0.0),
+					top: length(0.0_f32),
 					bottom: length(params.position.y - window_padding),
-					right: length(0.0),
+					right: length(0.0_f32),
 				},
-				taffy::JustifyContent::Start, // x start
-				taffy::AlignItems::End,       // y end
+				taffy::JustifyContent::START, // x start
+				taffy::AlignItems::END,       // y end
 			),
 			WguiWindowPlacement::TopRight => (
 				taffy::Rect {
-					left: length(0.0),
+					left: length(0.0_f32),
 					top: length(params.position.y - header_height - window_padding),
-					bottom: length(0.0),
+					bottom: length(0.0_f32),
 					right: length(params.position.x - window_padding),
 				},
-				taffy::JustifyContent::End, // x end
-				taffy::AlignItems::Start,   // y start
+				taffy::JustifyContent::END, // x end
+				taffy::AlignItems::START,   // y start
 			),
 			WguiWindowPlacement::BottomRight => (
 				taffy::Rect {
-					left: length(0.0),
-					top: length(0.0),
+					left: length(0.0_f32),
+					top: length(0.0_f32),
 					bottom: length(params.position.y - window_padding),
 					right: length(params.position.x - window_padding),
 				},
-				taffy::JustifyContent::End, // x end
-				taffy::AlignItems::End,     // y end
+				taffy::JustifyContent::END, // x end
+				taffy::AlignItems::END,     // y end
 			),
 		};
 
@@ -175,8 +175,8 @@ impl WguiWindow {
 				taffy::Style {
 					position: taffy::Position::Absolute,
 					size: taffy::Size {
-						width: percent(1.0),
-						height: percent(1.0),
+						width: percent(1.0_f32),
+						height: percent(1.0_f32),
 					},
 					..Default::default()
 				},
@@ -189,7 +189,7 @@ impl WguiWindow {
 				AnimationEasing::OutQuad,
 				Box::new(|common, data| {
 					let rect = data.obj.get_as_mut::<WidgetRectangle>().unwrap() /* should always succeed */;
-					rect.params.color = drawing::Color::new(0.0, 0.0, 0.0, data.pos * 0.3);
+					rect.params.color = drawing::Color::new(0.0, 0.0, 0.0, data.pos * 0.3).into();
 					common.alterables.mark_redraw();
 				}),
 			));
@@ -207,8 +207,8 @@ impl WguiWindow {
 				justify_content: Some(justify_content),
 				padding,
 				size: taffy::Size {
-					width: percent(1.0),
-					height: percent(1.0),
+					width: percent(1.0_f32),
+					height: percent(1.0_f32),
 				},
 				..Default::default()
 			},

@@ -6,12 +6,12 @@ use std::{
 };
 
 use crate::{
-	animation::Animations,
-	components::{self, Component, ComponentWeak, FocusChangeData, RefreshData},
+	animation::{Animation, Animations},
+	components::{self, Component, ComponentWeak, DestroyData, FocusChangeData, RefreshData},
 	drawing::{
 		self, ANSI_BOLD_CODE, ANSI_RESET_CODE, Boundary, PushScissorStackResult, push_scissor_stack, push_transform_stack,
 	},
-	event::{self, CallbackDataCommon, EventAlterables},
+	event::{self, CallbackDataCommon, Event, EventAlterables, StyleSetRequest},
 	globals::WguiGlobals,
 	sound::WguiSoundType,
 	task::Tasks,
@@ -128,6 +128,7 @@ pub struct LayoutState {
 	pub widgets: WidgetMap,
 	pub nodes: WidgetNodeMap,
 	pub tree: taffy::tree::TaffyTree<WidgetID>,
+	pub components_by_widget_id: SecondaryMap<WidgetID, ComponentWeak>,
 }
 
 pub struct ModifyLayoutStateData<'a> {
@@ -148,11 +149,15 @@ pub type LayoutDispatchFunc = Box<dyn FnOnce(&mut CallbackDataCommon) -> anyhow:
 
 pub enum LayoutTask {
 	RemoveWidget(WidgetID),
+	StopAnimation(WidgetID, u32 /* animation id */),
 	SetWidgetStyle(WidgetID, event::StyleSetRequest),
+	SetWidgetVisible(WidgetID, bool), // if true, sets Display to Flex; None, otherwise
 	ModifyLayoutState(LayoutModifyStateFunc),
 	PlaySound(WguiSoundType),
+	PlayAnimation(Animation),
 	Dispatch(LayoutDispatchFunc),
 	SetFocus(ComponentWeak),
+	RefreshPalette,
 	Unfocus,
 }
 
@@ -173,6 +178,8 @@ pub struct Layout {
 
 	pub widgets_to_tick: Vec<WidgetID>,
 
+	global_events_to_emit: Vec<Event>,
+
 	// *Main root*
 	// contains content_root_widget and topmost widgets
 	pub tree_root_widget: WidgetID,
@@ -184,7 +191,7 @@ pub struct Layout {
 	pub content_root_node: taffy::NodeId,
 
 	pub prev_size: Vec2,
-	pub content_size: Vec2,
+	pub content_size: Vec2, // cached value
 
 	pub needs_redraw: bool,
 	pub haptics_triggered: bool,
@@ -227,7 +234,7 @@ fn add_child_internal(
 }
 
 impl Layout {
-	pub fn common(&mut self) -> CallbackDataCommon<'_> {
+	pub const fn common(&mut self) -> CallbackDataCommon<'_> {
 		CallbackDataCommon {
 			alterables: &mut self.alterables,
 			state: &self.state,
@@ -279,21 +286,35 @@ impl Layout {
 		})
 	}
 
-	fn collect_children_ids_recursive(&self, widget_id: WidgetID, out: &mut Vec<(WidgetID, taffy::NodeId)>) {
+	pub fn collect_children_ids_recursive(&self, widget_id: WidgetID, out: &mut Vec<WidgetID>) {
 		let Some(node_id) = self.state.nodes.get(widget_id) else {
 			return;
 		};
 
 		for child_id in self.state.tree.child_ids(*node_id) {
 			let child_widget_id = self.state.tree.get_node_context(child_id).unwrap();
-			out.push((*child_widget_id, child_id));
+			out.push(*child_widget_id);
 			self.collect_children_ids_recursive(*child_widget_id, out);
 		}
 	}
 
-	fn remove_widget_single(&mut self, widget_id: WidgetID, node_id: Option<taffy::NodeId>) {
+	fn remove_widget_single(&mut self, widget_id: WidgetID) {
 		self.state.widgets.remove_single(widget_id);
-		self.state.nodes.remove(widget_id);
+		let node_id = self.state.nodes.remove(widget_id);
+
+		if let Some(component_weak) = self.state.components_by_widget_id.remove(widget_id)
+			&& let Some(component) = component_weak.upgrade()
+		{
+			let mut destroy_widgets = vec![];
+			component.destroy(&mut DestroyData {
+				layout: self,
+				destroy_widgets: &mut destroy_widgets,
+			});
+			for wid in destroy_widgets {
+				self.remove_widget_single(wid);
+			}
+		}
+
 		if let Some(node_id) = node_id {
 			self.registered_components_to_refresh.remove(&node_id);
 			let _ = self.state.tree.remove(node_id);
@@ -309,16 +330,15 @@ impl Layout {
 			self.mark_redraw();
 		}
 
-		for (widget_id, node_id) in ids {
-			self.remove_widget_single(widget_id, Some(node_id));
+		for widget_id in ids {
+			self.remove_widget_single(widget_id);
 		}
 	}
 
 	// remove widget and its children, recursively
 	pub fn remove_widget(&mut self, widget_id: WidgetID) {
 		self.remove_children(widget_id);
-		let node_id = self.state.nodes.get(widget_id);
-		self.remove_widget_single(widget_id, node_id.copied());
+		self.remove_widget_single(widget_id);
 		self.mark_redraw();
 	}
 
@@ -450,19 +470,24 @@ impl Layout {
 			.as_ref()
 			.is_none_or(PushScissorStackResult::should_display)
 		{
-			// check children first
-			self.push_event_children(node_id, event, event_result, alterables, user_data)?;
+			let res_priority = widget.process_event_priority(
+				&mut self.get_event_params(l, node_id, style, alterables),
+				widget_id,
+				event,
+				event_result,
+			)?;
 
-			if event_result.can_propagate() {
-				let mut params = EventParams {
-					state: &self.state,
-					layout: l,
-					alterables,
-					node_id,
-					style,
-				};
+			if res_priority.can_propagate() {
+				// check children first
+				self.push_event_children(node_id, event, event_result, alterables, user_data)?;
 
-				widget.process_event(widget_id, node_id, event, event_result, user_data, &mut params)?;
+				widget.process_event(
+					&mut self.get_event_params(l, node_id, style, alterables),
+					widget_id,
+					event,
+					event_result,
+					user_data,
+				)?;
 			}
 		}
 
@@ -472,6 +497,22 @@ impl Layout {
 		alterables.transform_stack.pop();
 
 		Ok(())
+	}
+
+	const fn get_event_params<'a>(
+		&'a self,
+		l: &'a taffy::Layout,
+		node_id: taffy::NodeId,
+		style: &'a taffy::Style,
+		alterables: &'a mut EventAlterables,
+	) -> EventParams<'a> {
+		EventParams {
+			node_id,
+			style,
+			state: &self.state,
+			alterables,
+			taffy_layout: l,
+		}
 	}
 
 	pub const fn check_toggle_needs_redraw(&mut self) -> bool {
@@ -508,6 +549,18 @@ impl Layout {
 			&mut (user1, user2),
 		)?;
 		self.process_alterables(alterables)?;
+
+		let mut alterables = EventAlterables::default();
+		for event in std::mem::take(&mut self.global_events_to_emit) {
+			self.push_event_widget(
+				self.tree_root_node,
+				&event,
+				&mut event_result,
+				&mut alterables,
+				&mut (user1, user2),
+			)?;
+		}
+
 		Ok(event_result)
 	}
 
@@ -518,10 +571,11 @@ impl Layout {
 			nodes: WidgetNodeMap::default(),
 			globals,
 			theme: params.theme,
+			components_by_widget_id: SecondaryMap::default(),
 		};
 
 		let size = if params.resize_to_parent {
-			taffy::Size::percent(1.0)
+			taffy::Size::percent(1.0_f32)
 		} else {
 			taffy::Size::auto()
 		};
@@ -580,6 +634,7 @@ impl Layout {
 			sounds_to_play_once: Vec::new(),
 			focused_component: None,
 			alterables: Default::default(),
+			global_events_to_emit: Vec::new(),
 		})
 	}
 
@@ -600,7 +655,10 @@ impl Layout {
 		}
 	}
 
-	fn try_recompute_layout(&mut self, size: Vec2) -> anyhow::Result<()> {
+	fn try_recompute_layout(&mut self, mut size: Vec2) -> anyhow::Result<()> {
+		size.x = size.x.round();
+		size.y = size.y.round();
+
 		if !self.state.tree.dirty(self.tree_root_node)? && self.prev_size == size {
 			// Nothing to do
 			return Ok(());
@@ -675,6 +733,7 @@ impl Layout {
 			.process(&self.state, &mut self.alterables, params.timestep_alpha);
 		self.process_alterables(alterables)?;
 		self.try_recompute_layout(params.size)?;
+		self.process_pending_components();
 
 		Ok(LayoutUpdateResult {
 			sounds_to_play: std::mem::take(&mut self.sounds_to_play_once),
@@ -684,9 +743,10 @@ impl Layout {
 	pub fn tick(&mut self) -> anyhow::Result<()> {
 		let mut alterables = EventAlterables::default();
 		self.animations.tick(&self.state, &mut alterables);
-		self.process_pending_components();
 		self.process_pending_widget_ticks(&mut alterables);
 		self.process_alterables(alterables)?;
+		self.try_recompute_layout(self.content_size /* cached value */)?;
+		self.process_pending_components();
 		Ok(())
 	}
 
@@ -694,6 +754,13 @@ impl Layout {
 		let mut tasks = self.tasks.drain();
 		while let Some(task) = tasks.pop_front() {
 			match task {
+				LayoutTask::PlayAnimation(animation) => {
+					self.animations.add(animation);
+				}
+				LayoutTask::RefreshPalette => {
+					let root = self.tree_root_widget;
+					LayoutState::refresh_palette_recur(&mut self.common(), root);
+				}
 				LayoutTask::RemoveWidget(widget_id) => {
 					self.remove_widget(widget_id);
 				}
@@ -711,12 +778,25 @@ impl Layout {
 				LayoutTask::SetWidgetStyle(widget_id, style_request) => {
 					self.set_style_request(widget_id, &style_request);
 				}
+				LayoutTask::SetWidgetVisible(widget_id, visible) => {
+					self.set_style_request(
+						widget_id,
+						&StyleSetRequest::Display(if visible {
+							taffy::Display::Flex
+						} else {
+							taffy::Display::None
+						}),
+					);
+				}
 				LayoutTask::SetFocus(weak) => {
 					if let Some(c) = weak.upgrade() {
 						self.set_focus(Some(&components::Component(c)))?;
 					}
 				}
 				LayoutTask::Unfocus => self.set_focus(None)?,
+				LayoutTask::StopAnimation(widget_id, animation_id) => {
+					self.animations.stop_by_widget(widget_id, Some(animation_id));
+				}
 			}
 		}
 
@@ -771,6 +851,9 @@ impl Layout {
 			event::StyleSetRequest::Margin(margin) => {
 				cur_style.margin = *margin;
 			}
+			event::StyleSetRequest::Padding(padding) => {
+				cur_style.padding = *padding;
+			}
 			event::StyleSetRequest::Width(val) => {
 				cur_style.size.width = *val;
 			}
@@ -815,10 +898,12 @@ impl Layout {
 			}
 		}
 
-		if !alterables.widgets_to_tick.is_empty() {
-			for widget_id in &alterables.widgets_to_tick {
-				self.widgets_to_tick.push(*widget_id);
-			}
+		for widget_id in alterables.widgets_to_tick {
+			self.widgets_to_tick.push(widget_id);
+		}
+
+		for event in alterables.global_events_to_emit {
+			self.global_events_to_emit.push(event);
 		}
 
 		for c in alterables.components_to_refresh_once {
@@ -878,7 +963,7 @@ impl Layout {
 			layout.location.y,
 			layout.content_size.width,
 			layout.content_size.height,
-			state.obj.debug_print()
+			state.obj.debug_print(&self.state.globals.get())
 		);
 
 		buf.append(&mut line.into_bytes());
@@ -935,5 +1020,51 @@ impl LayoutState {
 
 	pub fn get_widget_style(&self, id: WidgetID) -> Option<&taffy::Style> {
 		self.get_node_style(*self.nodes.get(id)?)
+	}
+
+	pub fn fetch_component_by_widget_id(&self, widget_id: WidgetID) -> anyhow::Result<Component> {
+		let Some(weak) = self.components_by_widget_id.get(widget_id) else {
+			anyhow::bail!("Component by widget ID \"{widget_id:?}\" doesn't exist");
+		};
+
+		let Some(component) = weak.upgrade() else {
+			anyhow::bail!("Component by widget ID \"{widget_id:?}\" has disappeared");
+		};
+
+		Ok(Component(component))
+	}
+
+	pub fn fetch_component_from_widget_id_as<T: 'static>(&self, widget_id: WidgetID) -> anyhow::Result<Rc<T>> {
+		let component = self.fetch_component_by_widget_id(widget_id)?;
+
+		if !(*component.0).as_any().is::<T>() {
+			anyhow::bail!("fetch_component_from_widget_id_as({widget_id:?}): type not matching");
+		}
+
+		// safety: we just checked the type
+		unsafe { Ok(Rc::from_raw(Rc::into_raw(component.0).cast())) }
+	}
+
+	fn refresh_palette_recur(common: &mut CallbackDataCommon, widget_id: WidgetID) {
+		if let Some(widget) = common.state.widgets.get(widget_id) {
+			widget.state().obj.palette_updated(common);
+		} else {
+			debug_assert!(false);
+			return;
+		}
+
+		let Some(node_id) = common.state.nodes.get(widget_id) else {
+			/* node/widget desync, this shouldn't happen */
+			debug_assert!(false);
+			return;
+		};
+
+		for child_node_id in common.state.tree.child_ids(*node_id) {
+			let Some(widget_id) = common.state.tree.get_node_context(child_node_id) else {
+				debug_assert!(false);
+				continue;
+			};
+			LayoutState::refresh_palette_recur(common, *widget_id);
+		}
 	}
 }

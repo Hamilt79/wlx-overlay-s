@@ -2,8 +2,8 @@ use glam::{Mat4, Vec2};
 use wgui::{
 	animation::{Animation, AnimationEasing},
 	assets::AssetPath,
+	color::WguiColorName,
 	components::{self, button::ButtonClickCallback},
-	drawing,
 	i18n::Translation,
 	layout::{Layout, LayoutTask, WidgetID},
 	parser::{Fetchable, ParseDocumentParams},
@@ -45,6 +45,7 @@ pub fn create_button(par: CreateButtonParams) -> anyhow::Result<()> {
 	Ok(())
 }
 
+#[allow(dead_code)]
 pub fn create_label(layout: &mut Layout, id_parent: WidgetID, content: Translation) -> anyhow::Result<()> {
 	let label = WidgetLabel::create(
 		&mut layout.state,
@@ -54,6 +55,7 @@ pub fn create_label(layout: &mut Layout, id_parent: WidgetID, content: Translati
 				wrap: true,
 				..Default::default()
 			},
+			..Default::default()
 		},
 	);
 
@@ -69,10 +71,11 @@ pub fn create_label_error(layout: &mut Layout, parent: WidgetID, content: String
 			content: Translation::from_raw_text_string(content),
 			style: TextStyle {
 				wrap: true,
-				color: Some(drawing::Color::new(1.0, 0.5, 0.0, 1.0)),
+				color: Some(WguiColorName::Danger.into()),
 				weight: Some(FontWeight::Bold),
 				..Default::default()
 			},
+			..Default::default()
 		},
 	);
 
@@ -83,8 +86,9 @@ pub fn create_label_error(layout: &mut Layout, parent: WidgetID, content: String
 
 pub fn create_icon(layout: &mut Layout, id_parent: WidgetID, size: Vec2, path: AssetPath) -> anyhow::Result<WidgetID> {
 	let widget_sprite = WidgetSprite::create(WidgetSpriteParams {
-		color: None,
+		color: Some(WguiColorName::OnBackground.into()),
 		glyph_data: Some(CustomGlyphData::from_assets(&layout.state.globals, path)?),
+		..Default::default()
 	});
 
 	let size = taffy::Size {
@@ -96,9 +100,9 @@ pub fn create_icon(layout: &mut Layout, id_parent: WidgetID, size: Vec2, path: A
 		id_parent,
 		widget_sprite,
 		taffy::Style {
-			min_size: size.clone(),
-			max_size: size.clone(),
-			size: size.clone(),
+			min_size: size,
+			max_size: size,
+			size,
 			..Default::default()
 		},
 	)?;

@@ -13,11 +13,11 @@ use wgui::{
 		checkbox::ComponentCheckbox,
 	},
 	drawing::Color,
-	event::StyleSetRequest,
 	font_config::WguiFontConfig,
 	globals::WguiGlobals,
 	i18n::Translation,
 	layout::{Layout, LayoutParams, LayoutUpdateParams, Widget},
+	palette::WguiColorPalette,
 	parser::{Fetchable, ParseDocumentExtra, ParseDocumentParams, ParserState},
 	taffy::{self, prelude::length},
 	task::Tasks,
@@ -87,12 +87,14 @@ impl TestbedGeneric {
 
 	pub fn new(assets: Box<assets::Asset>) -> anyhow::Result<Self> {
 		let lang_provider = WayVRLangProvider::default();
+		let palette_name = std::env::var("PALETTE").unwrap_or_else(|_| "Default".to_string());
 
 		let globals = WguiGlobals::new(
 			assets,
 			&lang_provider,
 			&WguiFontConfig::default(),
 			PathBuf::new(), // cwd
+			WguiColorPalette::get_builtin(&palette_name),
 		)?;
 
 		let extra = ParseDocumentExtra {
@@ -117,9 +119,9 @@ impl TestbedGeneric {
 				color = color.mult_rgb(mult_f32);
 
 				let mut rect = par.get_widget_as::<WidgetRectangle>().unwrap();
-				rect.params.color = color;
+				rect.params.color = color.into();
 			})),
-			dev_mode: false,
+			..Default::default()
 		};
 
 		let (layout, parser_state) = wgui::parser::new_layout_from_assets(
@@ -134,14 +136,9 @@ impl TestbedGeneric {
 		let div_visibility = parser_state.fetch_widget(&layout.state, "div_visibility")?;
 
 		cb_visible.on_toggle(Box::new(move |common, evt| {
-			common.alterables.set_style(
-				div_visibility.id,
-				StyleSetRequest::Display(if evt.checked {
-					taffy::Display::Flex
-				} else {
-					taffy::Display::None
-				}),
-			);
+			common
+				.alterables
+				.set_widget_visible(div_visibility.id, evt.checked);
 			Ok(())
 		}));
 
@@ -240,8 +237,8 @@ impl TestbedGeneric {
 			WidgetDiv::create(),
 			taffy::Style {
 				size: taffy::Size {
-					width: length(128.0),
-					height: length(64.0),
+					width: length(128.0_f32),
+					height: length(64.0_f32),
 				},
 				..Default::default()
 			},

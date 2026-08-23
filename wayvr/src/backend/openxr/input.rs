@@ -4,14 +4,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-use glam::{Affine3A, Quat, Vec3, bool};
+use glam::{Affine3A, FloatExt, Quat, Vec3, bool};
 use libmonado::{self as mnd, DeviceLogic};
 use openxr::{self as xr, Quaternionf, Vector2f, Vector3f};
-use serde::{Deserialize, Serialize};
-use wlx_common::{config::HandsfreePointer, config_io};
+use wlx_common::{
+    config::HandsfreePointer,
+    openxr_actions::{OneOrMany, load_xr_input_profiles},
+    openxr_bindings_schema::DEFAULT_BUTTON_THRESHOLDS,
+};
 
 use crate::{
-    backend::input::{Haptics, InputState, Pointer, TrackedDevice, TrackedDeviceRole},
+    backend::input::{
+        Haptics, InputState, Pointer, PointerState, TrackedDevice, TrackedDeviceRole,
+    },
     state::{AppSession, AppState},
 };
 
@@ -46,7 +51,7 @@ pub struct MultiClickHandler<const COUNT: usize> {
 impl<const COUNT: usize> MultiClickHandler<COUNT> {
     fn new(action_set: &xr::ActionSet, action_name: &str, side: &str) -> anyhow::Result<Self> {
         let name = format!("{side}_{COUNT}-{action_name}");
-        let name_f32 = format!("{}_value", &name);
+        let name_f32 = format!("{name}_value");
 
         let action_bool = action_set.create_action::<bool>(&name, &name, &[])?;
         let action_f32 = action_set.create_action::<f32>(&name_f32, &name_f32, &[])?;
@@ -113,6 +118,7 @@ pub struct CustomClickAction {
     single: MultiClickHandler<0>,
     double: MultiClickHandler<1>,
     triple: MultiClickHandler<2>,
+    threshold: [f32; 2],
 }
 
 impl CustomClickAction {
@@ -125,18 +131,19 @@ impl CustomClickAction {
             single,
             double,
             triple,
+            threshold: DEFAULT_BUTTON_THRESHOLDS,
         })
     }
-    pub fn state(
-        &mut self,
-        before: bool,
-        state: &XrState,
-        session: &AppSession,
-    ) -> anyhow::Result<bool> {
+
+    pub const fn set_threshold(&mut self, threshold: [f32; 2]) {
+        self.threshold = threshold;
+    }
+
+    pub fn state(&mut self, before: bool, state: &XrState) -> anyhow::Result<bool> {
         let threshold = if before {
-            session.config.xr_click_sensitivity_release
+            self.threshold[0]
         } else {
-            session.config.xr_click_sensitivity
+            self.threshold[1]
         };
 
         Ok(self.single.check(&state.session, threshold)?
@@ -170,14 +177,13 @@ impl OpenXrInputSource {
                 .instance()
                 .create_action_set("wayvr", "WayVR Actions", 0)?;
 
-        let left_source = OpenXrHandSource::new(&mut action_set, "left")?;
-        let right_source = OpenXrHandSource::new(&mut action_set, "right")?;
-        let fallback_source = OpenXrHandSource::new(&mut action_set, "handsfree")?;
+        let mut left_source = OpenXrHandSource::new(&mut action_set, "left")?;
+        let mut right_source = OpenXrHandSource::new(&mut action_set, "right")?;
+        let mut fallback_source = OpenXrHandSource::new(&mut action_set, "handsfree")?;
 
-        suggest_bindings(
-            &xr.instance,
-            &[&left_source, &right_source, &fallback_source],
-        );
+        let mut hands: [&mut OpenXrHandSource; 3] =
+            [&mut left_source, &mut right_source, &mut fallback_source];
+        suggest_bindings(&xr.instance, &mut hands);
 
         xr.session.attach_action_sets(&[&action_set])?;
 
@@ -206,7 +212,7 @@ impl OpenXrInputSource {
         );
     }
 
-    pub fn update(&mut self, xr: &XrState, state: &mut AppState) -> anyhow::Result<()> {
+    pub fn update(&mut self, xr: &XrState, app: &mut AppState) -> anyhow::Result<()> {
         xr.session.sync_actions(&[(&self.action_set).into()])?;
 
         let loc = xr.view.locate(&xr.stage, xr.predicted_display_time)?;
@@ -216,7 +222,7 @@ impl OpenXrInputSource {
             .location_flags
             .contains(xr::SpaceLocationFlags::ORIENTATION_VALID)
         {
-            state.input_state.hmd.matrix3 = hmd.matrix3;
+            app.input_state.hmd.matrix3 = hmd.matrix3;
         } else {
             hmd_tracked = false;
         }
@@ -225,25 +231,46 @@ impl OpenXrInputSource {
             .location_flags
             .contains(xr::SpaceLocationFlags::POSITION_VALID)
         {
-            state.input_state.hmd.translation = hmd.translation;
+            app.input_state.hmd.translation = hmd.translation;
         } else {
             hmd_tracked = false;
         }
 
         let mut any_tracked = false;
-        for i in 0..2 {
-            let pointer = &mut state.input_state.pointers[i];
-            self.pointers[i].update(pointer, xr, &state.session)?;
-            any_tracked |= pointer.tracked;
+        let old_handsfree = app.session.config.handsfree_pointer;
+
+        if app.input_state.picking_focus.is_none() {
+            let should_disable_lerp = app.input_state.should_disable_lerp();
+            for i in 0..2 {
+                let pointer = &mut app.input_state.pointers[i];
+                self.pointers[i].update(pointer, xr, &app.session, !should_disable_lerp)?;
+                any_tracked |= pointer.tracked;
+            }
+        } else {
+            app.session.config.handsfree_pointer = app.session.config.handsfree_alt_tab.into();
+
+            app.input_state.handsfree_state.scroll_x =
+                app.input_state.handsfree_state.scroll_x.lerp(0.0, 0.7);
+            app.input_state.handsfree_state.scroll_y =
+                app.input_state.handsfree_state.scroll_y.lerp(0.0, 0.7);
+
+            let ptr1 = &mut app.input_state.pointers[1];
+            ptr1.before = ptr1.now;
+            ptr1.now = PointerState::default();
+            ptr1.tracked = false;
         }
+
         if !any_tracked {
             self.handsfree_pointer.update_handsfree(
-                &mut state.input_state.pointers[0],
+                &mut app.input_state.pointers[0],
                 xr,
-                &state.session,
+                &app.session,
                 hmd,
                 hmd_tracked,
+                &app.input_state.handsfree_state,
             )?;
+
+            app.session.config.handsfree_pointer = old_handsfree;
         }
 
         Ok(())
@@ -346,6 +373,7 @@ impl OpenXrPointer {
         session: &AppSession,
         hmd: Affine3A,
         hmd_tracked: bool,
+        handsfree_state: &PointerState,
     ) -> anyhow::Result<()> {
         match session.config.handsfree_pointer {
             HandsfreePointer::None => return Ok(()),
@@ -367,7 +395,11 @@ impl OpenXrPointer {
             }
             HandsfreePointer::EyeTracking | HandsfreePointer::EyeTrackingOnly => {
                 // more aggressive smoothing for eye
-                self.pointer_load_pose(pointer, xr, session.config.pointer_lerp_factor * 0.5)?;
+                self.pointer_load_pose(
+                    pointer,
+                    xr,
+                    Some(session.config.pointer_lerp_factor * 0.5),
+                )?;
             }
         }
 
@@ -376,11 +408,22 @@ impl OpenXrPointer {
             session.config.handsfree_pointer,
             HandsfreePointer::HmdOnly | HandsfreePointer::EyeTrackingOnly
         ) {
-            // skip actions
+            // input from wayvrctl
+            pointer.now.click = handsfree_state.click;
+            pointer.now.grab = handsfree_state.grab;
+            pointer.now.grab_float = handsfree_state.grab_float;
+            pointer.now.click_modifier_right = handsfree_state.click_modifier_right;
+            pointer.now.click_modifier_middle = handsfree_state.click_modifier_middle;
+            pointer.now.scroll_y = handsfree_state.scroll_y;
+
+            // skip action loading
             return Ok(());
         }
 
-        self.pointer_load_actions(pointer, xr, session)?;
+        self.pointer_load_actions(pointer, xr)?;
+        pointer.now.click_modifier_right = handsfree_state.click_modifier_right;
+        pointer.now.click_modifier_middle = handsfree_state.click_modifier_middle;
+        pointer.now.scroll_y = handsfree_state.scroll_y;
 
         Ok(())
     }
@@ -390,10 +433,19 @@ impl OpenXrPointer {
         pointer: &mut Pointer,
         xr: &XrState,
         session: &AppSession,
+        do_lerp: bool,
     ) -> anyhow::Result<()> {
         pointer.handsfree = false;
-        self.pointer_load_pose(pointer, xr, session.config.pointer_lerp_factor)?;
-        self.pointer_load_actions(pointer, xr, session)?;
+        self.pointer_load_pose(
+            pointer,
+            xr,
+            if do_lerp {
+                Some(session.config.pointer_lerp_factor)
+            } else {
+                None
+            },
+        )?;
+        self.pointer_load_actions(pointer, xr)?;
 
         Ok(())
     }
@@ -402,7 +454,7 @@ impl OpenXrPointer {
         &mut self,
         pointer: &mut Pointer,
         xr: &XrState,
-        lerp_factor: f32,
+        lerp_factor: Option<f32>,
     ) -> anyhow::Result<()> {
         let location = self.space.locate(&xr.stage, xr.predicted_display_time)?;
         if location
@@ -417,12 +469,17 @@ impl OpenXrPointer {
                     transmute::<Vector3f, Vec3>(location.pose.position),
                 )
             };
-            let lerp_factor = (1.0 / (xr.fps / 100.0) * lerp_factor).clamp(0.1, 1.0);
+
             pointer.raw_pose = Affine3A::from_rotation_translation(new_quat, new_pos);
-            pointer.pose = Affine3A::from_rotation_translation(
-                cur_quat.lerp(new_quat, lerp_factor),
-                cur_pos.lerp(new_pos.into(), lerp_factor).into(),
-            );
+            if let Some(lerp_factor) = lerp_factor {
+                let lerp_factor = (1.0 / (xr.fps / 100.0) * lerp_factor).clamp(0.1, 1.0);
+                pointer.pose = Affine3A::from_rotation_translation(
+                    cur_quat.lerp(new_quat, lerp_factor),
+                    cur_pos.lerp(new_pos.into(), lerp_factor).into(),
+                );
+            } else {
+                pointer.pose = pointer.raw_pose; // no lerp
+            }
             pointer.tracked = true;
         } else {
             pointer.tracked = false;
@@ -430,15 +487,10 @@ impl OpenXrPointer {
         Ok(())
     }
 
-    fn pointer_load_actions(
-        &mut self,
-        pointer: &mut Pointer,
-        xr: &XrState,
-        session: &AppSession,
-    ) -> anyhow::Result<()> {
-        pointer.now.click = self.source.click.state(pointer.before.click, xr, session)?;
+    fn pointer_load_actions(&mut self, pointer: &mut Pointer, xr: &XrState) -> anyhow::Result<()> {
+        pointer.now.click = self.source.click.state(pointer.before.click, xr)?;
 
-        pointer.now.grab = self.source.grab.state(pointer.before.grab, xr, session)?;
+        pointer.now.grab = self.source.grab.state(pointer.before.grab, xr)?;
 
         let scroll = self
             .source
@@ -449,55 +501,49 @@ impl OpenXrPointer {
         pointer.now.scroll_x = scroll.x;
         pointer.now.scroll_y = scroll.y;
 
-        pointer.now.alt_click =
-            self.source
-                .alt_click
-                .state(pointer.before.alt_click, xr, session)?;
+        pointer.now.alt_click = self.source.alt_click.state(pointer.before.alt_click, xr)?;
 
-        pointer.now.show_hide =
-            self.source
-                .show_hide
-                .state(pointer.before.show_hide, xr, session)?;
+        pointer.now.show_hide = self.source.show_hide.state(pointer.before.show_hide, xr)?;
 
-        pointer.now.click_modifier_right =
-            self.source
-                .modifier_right
-                .state(pointer.before.click_modifier_right, xr, session)?;
+        pointer.now.click_modifier_right = self
+            .source
+            .modifier_right
+            .state(pointer.before.click_modifier_right, xr)?;
 
-        pointer.now.toggle_dashboard =
-            self.source
-                .toggle_dashboard
-                .state(pointer.before.toggle_dashboard, xr, session)?;
+        pointer.now.toggle_dashboard = self
+            .source
+            .toggle_dashboard
+            .state(pointer.before.toggle_dashboard, xr)?;
 
-        pointer.now.click_modifier_middle =
-            self.source
-                .modifier_middle
-                .state(pointer.before.click_modifier_middle, xr, session)?;
+        pointer.now.click_modifier_middle = self
+            .source
+            .modifier_middle
+            .state(pointer.before.click_modifier_middle, xr)?;
 
-        pointer.now.move_mouse =
-            self.source
-                .move_mouse
-                .state(pointer.before.move_mouse, xr, session)?;
+        pointer.now.move_mouse = self
+            .source
+            .move_mouse
+            .state(pointer.before.move_mouse, xr)?;
 
-        pointer.now.space_drag =
-            self.source
-                .space_drag
-                .state(pointer.before.space_drag, xr, session)?;
+        pointer.now.space_drag = self
+            .source
+            .space_drag
+            .state(pointer.before.space_drag, xr)?;
 
-        pointer.now.space_fling =
-            self.source
-                .space_fling
-                .state(pointer.before.space_fling, xr, session)?;
+        pointer.now.space_fling = self
+            .source
+            .space_fling
+            .state(pointer.before.space_fling, xr)?;
 
-        pointer.now.space_rotate =
-            self.source
-                .space_rotate
-                .state(pointer.before.space_rotate, xr, session)?;
+        pointer.now.space_rotate = self
+            .source
+            .space_rotate
+            .state(pointer.before.space_rotate, xr)?;
 
-        pointer.now.space_reset =
-            self.source
-                .space_reset
-                .state(pointer.before.space_reset, xr, session)?;
+        pointer.now.space_reset = self
+            .source
+            .space_reset
+            .state(pointer.before.space_reset, xr)?;
 
         Ok(())
     }
@@ -653,153 +699,109 @@ macro_rules! add_custom_lr {
 }
 
 #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
-fn suggest_bindings(instance: &xr::Instance, hands: &[&OpenXrHandSource; 3]) {
-    let profiles = load_action_profiles();
+macro_rules! set_threshold_for {
+    ($hands:expr, $profile_action:expr, $field:ident) => {
+        if let Some(ref profile_action) = $profile_action {
+            if let Some(threshold) = profile_action.threshold_left {
+                $hands[0].$field.set_threshold(threshold);
+            }
+            if let Some(threshold) = profile_action.threshold_right {
+                $hands[1].$field.set_threshold(threshold);
+            }
+        }
+    };
+}
+
+fn suggest_bindings(instance: &xr::Instance, hands: &mut [&mut OpenXrHandSource; 3]) {
+    let profiles = load_xr_input_profiles();
 
     for profile in profiles {
-        log::warn!("Loading profile {}", &profile.profile);
+        log::debug!("Loading profile {}", profile.profile);
 
         let Ok(profile_path) = instance.string_to_path(&profile.profile) else {
             log::warn!("Profile not supported: {}", profile.profile);
             continue;
         };
 
-        let mut bindings: Vec<xr::Binding> = vec![];
-
-        add_custom_lr!(profile.pose, pose, hands, bindings, instance);
-        add_custom_lr!(profile.haptic, haptics, hands, bindings, instance);
-        add_custom_lr!(profile.scroll, scroll, hands, bindings, instance);
-
-        add_custom!(profile.click, click, hands, bindings, instance);
-
-        add_custom!(profile.alt_click, alt_click, hands, bindings, instance);
-
-        add_custom!(profile.grab, grab, hands, bindings, instance);
-
-        add_custom!(profile.show_hide, show_hide, hands, bindings, instance);
-
-        add_custom!(
-            profile.toggle_dashboard,
-            toggle_dashboard,
-            hands,
-            bindings,
-            instance
-        );
-
-        add_custom!(profile.space_drag, space_drag, hands, bindings, instance);
-
-        add_custom!(
-            profile.space_fling,
-            space_fling,
-            hands,
-            bindings,
-            instance
-        );
-
-        add_custom!(
-            profile.space_rotate,
-            space_rotate,
-            hands,
-            bindings,
-            instance
-        );
-
-        add_custom!(profile.space_reset, space_reset, hands, bindings, instance);
-
-        add_custom!(
-            profile.click_modifier_right,
-            modifier_right,
-            hands,
-            bindings,
-            instance
-        );
-
-        add_custom!(
-            profile.click_modifier_middle,
-            modifier_middle,
-            hands,
-            bindings,
-            instance
-        );
-
-        add_custom!(profile.move_mouse, move_mouse, hands, bindings, instance);
-
-        if instance
-            .suggest_interaction_profile_bindings(profile_path, &bindings)
-            .is_err()
         {
-            log::error!("Bad bindings for {}", &profile.profile[22..]);
-            log::error!("Verify config: ~/.config/wayvr/openxr_actions.json5");
-        } else {
-            log::debug!(
-                "Bindings for {} bound successfully.",
-                &profile.profile[22..]
+            let mut bindings: Vec<xr::Binding> = vec![];
+
+            add_custom_lr!(profile.pose, pose, hands, bindings, instance);
+            add_custom_lr!(profile.haptic, haptics, hands, bindings, instance);
+            add_custom_lr!(profile.scroll, scroll, hands, bindings, instance);
+
+            add_custom!(profile.click, click, hands, bindings, instance);
+
+            add_custom!(profile.alt_click, alt_click, hands, bindings, instance);
+
+            add_custom!(profile.grab, grab, hands, bindings, instance);
+
+            add_custom!(profile.show_hide, show_hide, hands, bindings, instance);
+
+            add_custom!(
+                profile.toggle_dashboard,
+                toggle_dashboard,
+                hands,
+                bindings,
+                instance
             );
-        }
-    }
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-enum OneOrMany<T> {
-    One(T),
-    Many(Vec<T>),
-}
+            add_custom!(profile.space_drag, space_drag, hands, bindings, instance);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct OpenXrActionConfAction {
-    left: Option<OneOrMany<String>>,
-    right: Option<OneOrMany<String>>,
-    handsfree: Option<OneOrMany<String>>,
-    threshold: Option<[f32; 2]>,
-    double_click: Option<bool>,
-    triple_click: Option<bool>,
-}
+            add_custom!(profile.space_fling, space_fling, hands, bindings, instance);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct OpenXrActionConfProfile {
-    profile: String,
-    pose: Option<OpenXrActionConfAction>,
-    click: Option<OpenXrActionConfAction>,
-    grab: Option<OpenXrActionConfAction>,
-    alt_click: Option<OpenXrActionConfAction>,
-    show_hide: Option<OpenXrActionConfAction>,
-    toggle_dashboard: Option<OpenXrActionConfAction>,
-    space_drag: Option<OpenXrActionConfAction>,
-    space_fling: Option<OpenXrActionConfAction>,
-    space_rotate: Option<OpenXrActionConfAction>,
-    space_reset: Option<OpenXrActionConfAction>,
-    click_modifier_right: Option<OpenXrActionConfAction>,
-    click_modifier_middle: Option<OpenXrActionConfAction>,
-    move_mouse: Option<OpenXrActionConfAction>,
-    scroll: Option<OpenXrActionConfAction>,
-    haptic: Option<OpenXrActionConfAction>,
-}
+            add_custom!(
+                profile.space_rotate,
+                space_rotate,
+                hands,
+                bindings,
+                instance
+            );
 
-const DEFAULT_PROFILES: &str = include_str!("openxr_actions.json5");
+            add_custom!(profile.space_reset, space_reset, hands, bindings, instance);
 
-fn load_action_profiles() -> Vec<OpenXrActionConfProfile> {
-    let mut profiles: Vec<OpenXrActionConfProfile> =
-        serde_json5::from_str(DEFAULT_PROFILES).unwrap(); // want panic
+            add_custom!(
+                profile.click_modifier_right,
+                modifier_right,
+                hands,
+                bindings,
+                instance
+            );
 
-    let Some(conf) = config_io::load("openxr_actions.json5") else {
-        return profiles;
-    };
+            add_custom!(
+                profile.click_modifier_middle,
+                modifier_middle,
+                hands,
+                bindings,
+                instance
+            );
 
-    match serde_json5::from_str::<Vec<OpenXrActionConfProfile>>(&conf) {
-        Ok(override_profiles) => {
-            for new in override_profiles {
-                if let Some(i) = profiles.iter().position(|old| old.profile == new.profile) {
-                    profiles[i] = new;
-                } else {
-                    profiles.push(new);
-                }
+            add_custom!(profile.move_mouse, move_mouse, hands, bindings, instance);
+
+            if instance
+                .suggest_interaction_profile_bindings(profile_path, &bindings)
+                .is_err()
+            {
+                log::warn!("Could not apply bindings for {}", &profile.profile[22..]);
+            } else {
+                log::debug!(
+                    "Bindings for {} bound successfully.",
+                    &profile.profile[22..]
+                );
             }
         }
-        Err(e) => {
-            log::error!("Failed to load openxr_actions.json5: {e}");
-        }
-    }
 
-    profiles
+        set_threshold_for!(hands, profile.click, click);
+        set_threshold_for!(hands, profile.alt_click, alt_click);
+        set_threshold_for!(hands, profile.grab, grab);
+        set_threshold_for!(hands, profile.show_hide, show_hide);
+        set_threshold_for!(hands, profile.toggle_dashboard, toggle_dashboard);
+        set_threshold_for!(hands, profile.space_drag, space_drag);
+        set_threshold_for!(hands, profile.space_fling, space_fling);
+        set_threshold_for!(hands, profile.space_rotate, space_rotate);
+        set_threshold_for!(hands, profile.space_reset, space_reset);
+        set_threshold_for!(hands, profile.click_modifier_right, modifier_right);
+        set_threshold_for!(hands, profile.click_modifier_middle, modifier_middle);
+        set_threshold_for!(hands, profile.move_mouse, move_mouse);
+    }
 }

@@ -1,36 +1,47 @@
 pub mod client;
 mod comp;
-mod handle;
+pub mod hit_test;
 mod image_importer;
+mod input_capture;
 pub mod process;
 mod time;
 pub mod window;
+
 use anyhow::Context;
 use comp::Application;
-use process::ProcessVec;
-use slotmap::SecondaryMap;
+use glam::{DVec2, Vec2};
+use slotmap::{DenseSlotMap, SecondaryMap};
 use smallvec::SmallVec;
 use smithay::{
     desktop::PopupManager,
-    input::{SeatState, keyboard::XkbConfig},
+    input::{SeatState, keyboard::XkbConfig, pointer::CursorImageStatus},
     output::{Mode, Output},
     reexports::{
         wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration_manager as kde_decoration,
-        wayland_server::{self, backend::ClientId},
+        wayland_server::{
+            self,
+            backend::ClientId,
+            protocol::{wl_buffer, wl_surface::WlSurface},
+        },
     },
     utils::{Logical, Size},
     wayland::{
         compositor::{self, SurfaceData, with_states},
         dmabuf::{DmabufFeedbackBuilder, DmabufState},
+        relative_pointer::RelativePointerManagerState,
         selection::{
             data_device::DataDeviceState, ext_data_control as selection_ext,
             primary_selection::PrimarySelectionState, wlr_data_control as selection_wlr,
         },
         shell::{
             kde::decoration::KdeDecorationState,
-            xdg::{SurfaceCachedState, ToplevelSurface, XdgShellState, XdgToplevelSurfaceData},
+            xdg::{
+                SurfaceCachedState, ToplevelSurface, XdgShellState, XdgToplevelSurfaceData,
+                decoration::XdgDecorationState,
+            },
         },
         shm::ShmState,
+        viewporter::ViewporterState,
     },
 };
 use std::{
@@ -41,28 +52,45 @@ use std::{
     time::{Duration, Instant},
 };
 use vulkano::image::view::ImageView;
-use wayvr_ipc::{packet_client::PositionMode, packet_server};
-use wgui::gfx::WGfx;
+use wayland_protocols::xdg::shell::server::xdg_toplevel;
+use wayvr_ipc::packet_client::PositionMode;
+use wgui::{gfx::WGfx, globals::WguiGlobals, log::LogErr};
 use wlx_capture::frame::Transform;
-use wlx_common::desktop_finder::DesktopFinder;
+use wlx_common::{
+    audio::{AudioSystem, SamplePlayer},
+    config::{DefaultPositioning, GeneralConfig, InputCaptureMethod},
+    desktop_finder::DesktopFinder,
+};
 use xkbcommon::xkb;
 
 use crate::{
     backend::{
-        task::{OverlayTask, TaskContainer, TaskType, ToggleMode},
+        input::InputState,
+        task::{OverlayTask, SpawnPos, TaskContainer, TaskType, ToggleMode},
         wayvr::{
             image_importer::ImageImporter,
+            input_capture::InputCapture,
             process::{KillSignal, Process},
-            window::Window,
+            window::CreateWindowParams,
         },
     },
-    graphics::WGfxExtras,
-    ipc::{event_queue::SyncEventQueue, ipc_server, signal::WayVRSignal},
-    overlays::wayvr::create_wl_window_overlay,
+    graphics::{ExtentExt, WGfxExtras},
+    ipc::{event_queue::SyncEventQueue, ipc_server},
+    overlays::{
+        anchor::ALTTAB_HELP_NAME,
+        keyboard::KEYBOARD_NAME,
+        wayvr::{WvrCommand, create_wl_window_overlay},
+    },
     state::AppState,
-    subsystem::hid::{MODS_TO_KEYS, WheelDelta},
-    windowing::{OverlayID, OverlaySelector},
+    subsystem::{
+        dbus::DbusConnector,
+        hid::{self, MODS_TO_KEYS, WheelDelta},
+        input::HidWrapper,
+    },
+    windowing::{OverlayID, OverlaySelector, backend::OverlayEventData},
 };
+
+pub use hit_test::{WvrHitTarget, build_hit_context};
 
 #[derive(Debug, Clone)]
 pub struct WaylandEnv {
@@ -70,9 +98,13 @@ pub struct WaylandEnv {
 }
 
 impl WaylandEnv {
-    pub fn display_num_string(&self) -> String {
+    pub fn wayland_display_num_string(&self) -> String {
         // e.g. "wayland-20"
         format!("wayland-{}", self.display_num)
+    }
+    pub fn display_num_string(&self) -> String {
+        // e.g. ":20"
+        format!(":{}", self.display_num)
     }
 }
 
@@ -95,6 +127,8 @@ pub enum WayVRTask {
     NewToplevel(ClientId, ToplevelSurface),
     DropToplevel(ClientId, ToplevelSurface),
     MinimizeRequest(ClientId, ToplevelSurface),
+    TitleChange(ClientId, ToplevelSurface),
+    VisibilityChange(window::WindowHandle, bool),
     NewExternalProcess(ExternalProcessRequest),
     ProcessTerminationRequest(process::ProcessHandle, KillSignal),
     CloseWindowRequest(window::WindowHandle),
@@ -103,20 +137,31 @@ pub enum WayVRTask {
 pub struct WvrServerState {
     pub manager: client::WayVRCompositor,
     pub wm: window::WindowManager,
-    pub processes: process::ProcessVec,
+    pub processes: DenseSlotMap<process::ProcessHandle, process::Process>,
     pub tasks: SyncEventQueue<WayVRTask>,
     ticks: u64,
     cur_modifiers: u8,
-    signals: SyncEventQueue<WayVRSignal>,
     mouse_freeze: Instant,
     window_to_overlay: HashMap<window::WindowHandle, OverlayID>,
     overlay_to_window: SecondaryMap<OverlayID, window::WindowHandle>,
+    process_overlays: HashMap<process::ProcessHandle, Vec<OverlayID>>,
+    input_capture: Option<InputCapture>,
+    input_capture_init_attempted: bool,
+    has_input_focus: bool,
+    grab_toast_sent: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum MouseIndex {
     Left,
     Center,
     Right,
+}
+
+pub enum PointerFocusTarget {
+    Surface { surface: WlSurface, origin: Vec2 },
+    Toplevel,
+    None,
 }
 
 pub enum TickTask {
@@ -125,13 +170,10 @@ pub enum TickTask {
 
 const KEY_REPEAT_DELAY: i32 = 200;
 const KEY_REPEAT_RATE: i32 = 50;
+const WAYVR_SCREEN_RES: [i32; 2] = [2560, 1440];
 
 impl WvrServerState {
-    pub fn new(
-        gfx: Arc<WGfx>,
-        gfx_extras: &WGfxExtras,
-        signals: SyncEventQueue<WayVRSignal>,
-    ) -> anyhow::Result<Self> {
+    pub fn new(gfx: Arc<WGfx>, gfx_extras: &WGfxExtras) -> anyhow::Result<Self> {
         const fn filter_allow_any(_: &wayland_server::Client) -> bool {
             true
         }
@@ -157,8 +199,11 @@ impl WvrServerState {
             filter_allow_any,
         );
 
+        let xdg_decoration_state = XdgDecorationState::new::<Application>(&dh);
         let kde_decoration_state =
             KdeDecorationState::new::<Application>(&dh, kde_decoration::Mode::Server);
+        let relative_pointer_state = RelativePointerManagerState::new::<Application>(&dh);
+        let viewporter = ViewporterState::new::<Application>(&dh);
 
         let dummy_milli_hz = 60000; /* refresh rate in millihertz */
 
@@ -174,7 +219,7 @@ impl WvrServerState {
 
         let mode = Mode {
             refresh: dummy_milli_hz,
-            size: (2560, 1440).into(), //logical size in pixels
+            size: (WAYVR_SCREEN_RES[0], WAYVR_SCREEN_RES[1]).into(), //logical size in pixels
         };
 
         let _global = output.create_global::<Application>(&dh);
@@ -223,38 +268,50 @@ impl WvrServerState {
         let dma_importer = ImageImporter::new(gfx);
 
         let state = Application {
+            output,
             image_importer: dma_importer,
             display_handle: dh,
             compositor,
             xdg_shell,
+            seat,
             seat_state,
             shm,
             data_device,
             primary_selection_state,
             wlr_data_control_state,
             ext_data_control_state,
+            xdg_decoration_state,
             kde_decoration_state,
+            relative_pointer_state,
             wayvr_tasks: tasks.clone(),
-            redraw_requests: HashSet::new(),
             dmabuf_state,
             popup_manager: PopupManager::default(),
+            viewporter,
+            redraw_requests: HashSet::new(),
+            pending_frame_callbacks: HashMap::new(),
+            cursor_image: CursorImageStatus::default_named(),
         };
 
         Ok(Self {
             manager: client::WayVRCompositor::new(state, display, seat_keyboard, seat_pointer)?,
-            processes: ProcessVec::new(),
+            processes: Default::default(),
             wm: window::WindowManager::new(),
             ticks: 0,
             tasks,
             cur_modifiers: 0,
-            signals,
             mouse_freeze: Instant::now(),
             window_to_overlay: HashMap::new(),
             overlay_to_window: SecondaryMap::new(),
+            process_overlays: HashMap::new(),
+            input_capture: None,
+            input_capture_init_attempted: false,
+            has_input_focus: false,
+            grab_toast_sent: false,
         })
     }
 
     #[allow(clippy::too_many_lines)]
+    #[allow(clippy::significant_drop_tightening)]
     pub fn tick_events(app: &mut AppState) -> anyhow::Result<Vec<TickTask>> {
         let mut tasks: Vec<TickTask> = Vec::new();
 
@@ -267,26 +324,21 @@ impl WvrServerState {
             input_state: &app.input_state,
             tasks: &mut tasks,
             signals: &app.wayvr_signals,
+            hid_wrapper: &mut app.hid_provider,
         });
 
         // Tick all child processes
         let mut to_remove: SmallVec<[process::ProcessHandle; 2]> = SmallVec::new();
 
-        for (handle, process) in wvr_server.processes.iter_mut() {
+        for (handle, process) in &mut wvr_server.processes {
             if !process.is_running() {
                 to_remove.push(handle);
             }
         }
 
         for p_handle in &to_remove {
-            wvr_server.processes.remove(p_handle);
+            wvr_server.processes.remove(*p_handle);
             wvr_server.process_removed(&mut app.tasks, *p_handle);
-        }
-
-        if !to_remove.is_empty() {
-            app.wayvr_signals.send(WayVRSignal::BroadcastStateChanged(
-                packet_server::WvrStateChanged::ProcessRemoved,
-            ));
         }
 
         while let Some(task) = wvr_server.tasks.read() {
@@ -313,28 +365,35 @@ impl WvrServerState {
                             continue;
                         };
 
+                        let output_bounds = wvr_server.manager.state.output_logical_size();
+
                         let (min_size, max_size) = with_states(toplevel.wl_surface(), |state| {
                             let mut guard = state.cached_state.get::<SurfaceCachedState>();
-                            let (mut min_size, mut max_size) =
-                                { (guard.current().min_size, guard.current().max_size) };
+                            let current = guard.current();
+
+                            let mut min_size = current.min_size;
+                            let mut max_size = current.max_size;
 
                             if min_size.is_empty() {
                                 min_size = Size::new(1, 1);
                             }
 
                             if max_size.is_empty() {
-                                max_size = Size::new(4096, 4096);
+                                max_size = output_bounds;
+                            } else {
+                                max_size = max_size.clamp(Size::new(1, 1), output_bounds);
                             }
 
                             (min_size, max_size)
                         });
 
                         // Size, icon & fallback title comes from process
-                        let (size, pos, fallback_title, icon, is_cage) =
-                            match wvr_server.processes.get(&process_handle) {
+                        let (fallback_size, pos, fallback_title, icon, is_cage) =
+                            match wvr_server.processes.get(process_handle) {
                                 Some(Process::Managed(p)) => {
                                     let size: Size<i32, Logical> =
                                         Size::new(p.resolution[0] as _, p.resolution[1] as _);
+
                                     (
                                         size.clamp(min_size, max_size),
                                         p.pos_mode,
@@ -345,23 +404,44 @@ impl WvrServerState {
                                 }
                                 _ => (
                                     Size::new(1920, 1080).clamp(min_size, max_size),
-                                    PositionMode::Float,
+                                    match app.session.config.default_positioning {
+                                        DefaultPositioning::Anchored => PositionMode::Anchor,
+                                        DefaultPositioning::Floating => PositionMode::Float,
+                                        DefaultPositioning::Static => PositionMode::Static,
+                                    },
                                     None,
                                     None,
                                     false,
                                 ),
                             };
 
+                        let window_handle = wvr_server.wm.create_window(CreateWindowParams {
+                            toplevel: toplevel.clone(),
+                            process: process_handle,
+                            bounds: output_bounds,
+                            min_size,
+                            max_size,
+                            size_x: fallback_size.w as _,
+                            size_y: fallback_size.h as _,
+                        });
+
+                        toplevel.with_pending_state(|state| {
+                            state.bounds = Some(output_bounds);
+                            // suggest an initial size but let the app request a different one
+                            state.size = Some(fallback_size);
+                            state.states.set(xdg_toplevel::State::Activated);
+                        });
+                        toplevel.send_configure();
+
                         let mut title: Arc<str> = fallback_title
                             .unwrap_or_else(|| format!("P{}", client.pid))
                             .into();
 
-                        let window_handle = wvr_server.wm.create_window(
-                            toplevel.clone(),
-                            process_handle,
-                            size.w as _,
-                            size.h as _,
-                        );
+                        let spawn_pos = wvr_server
+                            .last_process_overlay(process_handle)
+                            .map_or(SpawnPos::Spread, |oid| {
+                                SpawnPos::Parent(OverlaySelector::Id(oid))
+                            });
 
                         let mut icon = icon;
 
@@ -405,15 +485,16 @@ impl WvrServerState {
                             None => DesktopFinder::create_icon(&title)?.into(),
                         };
 
-                        app.tasks.enqueue(TaskType::Overlay(OverlayTask::Create(
+                        app.tasks.enqueue(TaskType::Overlay(OverlayTask::Spawn(
                             OverlaySelector::Nothing,
+                            spawn_pos,
                             Box::new(move |app: &mut AppState| {
                                 create_wl_window_overlay(
                                     title,
                                     app,
                                     window_handle,
                                     icon,
-                                    [size.w as _, size.h as _],
+                                    [fallback_size.w as _, fallback_size.h as _],
                                     pos,
                                 )
                                 .context("Could not create WvrWindow overlay")
@@ -421,10 +502,6 @@ impl WvrServerState {
                                 .ok()
                             }),
                         )));
-
-                        app.wayvr_signals.send(WayVRSignal::BroadcastStateChanged(
-                            packet_server::WvrStateChanged::WindowCreated,
-                        ));
                     }
                 }
                 WayVRTask::DropToplevel(client_id, toplevel) => {
@@ -439,14 +516,48 @@ impl WvrServerState {
                             continue;
                         };
 
+                        let process_handle = wvr_server
+                            .wm
+                            .windows
+                            .get(window_handle)
+                            .map(|window| window.process);
+
                         if let Some(oid) = wvr_server.window_to_overlay.remove(&window_handle) {
                             app.tasks.enqueue(TaskType::Overlay(OverlayTask::Drop(
                                 OverlaySelector::Id(oid),
                             )));
                             wvr_server.overlay_to_window.remove(oid);
+
+                            if let Some(process_handle) = process_handle.as_ref() {
+                                let empty = if let Some(overlays) =
+                                    wvr_server.process_overlays.get_mut(process_handle)
+                                {
+                                    overlays.retain(|other| *other != oid);
+                                    overlays.is_empty()
+                                } else {
+                                    false
+                                };
+
+                                if empty {
+                                    wvr_server.process_overlays.remove(process_handle);
+                                }
+                            }
                         }
 
                         wvr_server.wm.remove_window(window_handle);
+                    }
+                }
+                WayVRTask::VisibilityChange(window_handle, visible) => {
+                    if let Some(oid) = wvr_server.window_to_overlay.get(&window_handle) {
+                        app.tasks
+                            .enqueue(TaskType::Overlay(OverlayTask::ToggleOverlay(
+                                OverlaySelector::Id(*oid),
+                                if visible {
+                                    ToggleMode::EnsureOn
+                                } else {
+                                    ToggleMode::EnsureOff
+                                },
+                            )));
                     }
                 }
                 WayVRTask::MinimizeRequest(client_id, toplevel) => {
@@ -470,8 +581,31 @@ impl WvrServerState {
                         }
                     }
                 }
+                WayVRTask::TitleChange(client_id, toplevel) => {
+                    for client in &wvr_server.manager.clients {
+                        if client.client.id() != client_id {
+                            continue;
+                        }
+                        let Some(window_handle) = wvr_server.wm.find_window_handle(&toplevel)
+                        else {
+                            log::warn!("MinimizeRequest: Couldn't find matching window handle");
+                            continue;
+                        };
+                        if let Some(oid) = wvr_server.window_to_overlay.get(&window_handle) {
+                            app.tasks.enqueue(TaskType::Overlay(OverlayTask::Modify(
+                                OverlaySelector::Id(*oid),
+                                Box::new(|app, owc| {
+                                    let _ = owc.backend.notify(
+                                        app,
+                                        OverlayEventData::WvrCommand(WvrCommand::ReloadTitle),
+                                    );
+                                }),
+                            )));
+                        }
+                    }
+                }
                 WayVRTask::ProcessTerminationRequest(process_handle, signal) => {
-                    if let Some(process) = wvr_server.processes.get_mut(&process_handle) {
+                    if let Some(process) = wvr_server.processes.get_mut(process_handle) {
                         process.kill(signal);
                     }
 
@@ -481,7 +615,7 @@ impl WvrServerState {
                         continue;
                     }
 
-                    for (h, w) in wvr_server.wm.windows.iter() {
+                    for (h, w) in &wvr_server.wm.windows {
                         if w.process != process_handle {
                             continue;
                         }
@@ -495,7 +629,7 @@ impl WvrServerState {
                     }
                 }
                 WayVRTask::CloseWindowRequest(window_handle) => {
-                    if let Some(w) = wvr_server.wm.windows.get(&window_handle) {
+                    if let Some(w) = wvr_server.wm.windows.get(window_handle) {
                         log::info!("Sending window close to {window_handle:?}");
                         w.toplevel.send_close();
                     } else {
@@ -514,9 +648,27 @@ impl WvrServerState {
             wvr_server.manager.cleanup_handles();
         }
 
+        wvr_server.process_input_capture(
+            &mut app.input_state,
+            &mut app.tasks,
+            &mut app.hid_provider,
+            &mut app.audio_sample_player,
+            &mut app.audio_system,
+            &app.wgui_globals,
+            &app.session.config,
+        );
+
         wvr_server.ticks += 1;
 
         Ok(tasks)
+    }
+
+    pub fn config_changed(&mut self, config: &GeneralConfig) {
+        if let Some(cap) = self.input_capture.as_mut() {
+            let _ = cap
+                .set_pointer_accel(config.wvr_mouse_acceleration, config.wvr_mouse_speed)
+                .log_err("Could not set mouse accel/speed");
+        }
     }
 
     pub fn terminate_process(
@@ -536,12 +688,25 @@ impl WvrServerState {
     pub fn overlay_added(&mut self, oid: OverlayID, window: window::WindowHandle) {
         self.overlay_to_window.insert(oid, window);
         self.window_to_overlay.insert(window, oid);
+
+        if let Some(process_handle) = self.wm.windows.get(window).map(|window| window.process) {
+            let overlays = self.process_overlays.entry(process_handle).or_default();
+            overlays.retain(|other| *other != oid);
+            overlays.push(oid);
+        }
+    }
+
+    fn last_process_overlay(&self, process_handle: process::ProcessHandle) -> Option<OverlayID> {
+        self.process_overlays
+            .get(&process_handle)
+            .and_then(|overlays| overlays.last())
+            .copied()
     }
 
     pub fn process_removed(&mut self, tasks: &mut TaskContainer, process: process::ProcessHandle) {
         let mut to_remove = vec![];
 
-        for (hnd, win) in self.wm.windows.iter() {
+        for (hnd, win) in &self.wm.windows {
             if win.process != process {
                 continue;
             }
@@ -559,50 +724,478 @@ impl WvrServerState {
         }
 
         for hnd in &to_remove {
-            self.wm.windows.remove(hnd);
+            self.wm.windows.remove(*hnd);
         }
+
+        self.process_overlays.remove(&process);
     }
 
     pub fn get_overlay_id(&self, window: window::WindowHandle) -> Option<OverlayID> {
         self.window_to_overlay.get(&window).copied()
     }
 
-    pub fn send_mouse_move(&mut self, handle: window::WindowHandle, x: u32, y: u32) {
-        if self.mouse_freeze > Instant::now() {
-            return;
+    #[allow(clippy::match_same_arms)]
+    pub fn hit_target_to_focus(
+        &self,
+        target: WvrHitTarget,
+        hover_window: window::WindowHandle,
+        _default_pos: Vec2,
+    ) -> PointerFocusTarget {
+        match target {
+            WvrHitTarget::Panel(_) => PointerFocusTarget::None,
+            WvrHitTarget::Toplevel { .. } => {
+                self.wm
+                    .windows
+                    .get(hover_window)
+                    .map_or(PointerFocusTarget::Toplevel, |w| {
+                        let surface = w.toplevel.wl_surface().clone();
+                        PointerFocusTarget::Surface {
+                            surface,
+                            origin: glam::Vec2::ZERO,
+                        }
+                    })
+            }
+            WvrHitTarget::Surface {
+                surface, origin, ..
+            } => PointerFocusTarget::Surface { surface, origin },
+            WvrHitTarget::Popup {
+                surface, origin, ..
+            } => PointerFocusTarget::Surface { surface, origin },
         }
-        if let Some(window) = self.wm.windows.get_mut(&handle) {
-            window.send_mouse_move(&mut self.manager, x, y);
-        } else {
-            return;
+    }
+
+    pub fn pointer_is_grabbed(&self) -> bool {
+        self.manager.seat_pointer.is_grabbed()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn process_input_capture(
+        &mut self,
+        input_state: &mut InputState,
+        tasks: &mut TaskContainer,
+        hid_wrapper: &mut HidWrapper,
+        audio_sample_player: &mut SamplePlayer,
+        audio_system: &mut AudioSystem,
+        globals: &WguiGlobals,
+        config: &GeneralConfig,
+    ) {
+        let input_capture = match (self.input_capture.as_mut(), config.wvr_input_capture) {
+            (Some(cap), InputCaptureMethod::Evdev) => cap,
+            (Some(_), InputCaptureMethod::None) => {
+                self.input_capture.take();
+                return;
+            }
+            (None, InputCaptureMethod::Evdev) if !self.input_capture_init_attempted => {
+                self.input_capture = InputCapture::new()
+                    .log_err("Could not initialize evdev input capture")
+                    .ok();
+                self.input_capture_init_attempted = true;
+                if let Some(cap) = self.input_capture.as_mut() {
+                    cap
+                } else {
+                    let text = &globals
+                        .i18n()
+                        .translate("NOTIFICATION.CANNOT_CAPTURE_KBD_MOUSE");
+                    let _ = DbusConnector::notify_send("WayVR", text, 1, 5000, 0, true);
+                    return;
+                }
+            }
+            (None, InputCaptureMethod::Evdev) => {
+                return;
+            }
+            (None, InputCaptureMethod::None) => {
+                self.input_capture_init_attempted = false;
+                return;
+            }
+        };
+
+        let mut mouse_delta = DVec2::ZERO;
+        let mut mouse_delta_raw = DVec2::ZERO;
+
+        for ev in input_capture.drain_events() {
+            match ev {
+                input_capture::CapturedEvent::Key { code, pressed } => {
+                    let vk = (code as u32) + 8;
+                    if input_state.picking_focus.is_aiming() {
+                        if (hid::VirtualKey::Q as u32) == vk {
+                            input_state.handsfree_state.grab = pressed;
+                            input_state.handsfree_state.grab_float = pressed;
+                        } else if (hid::VirtualKey::A as u32) == vk {
+                            input_state.handsfree_state.grab = pressed;
+                        } else if (hid::VirtualKey::W as u32) == vk {
+                            input_state.handsfree_state.click = pressed;
+                        } else if (hid::VirtualKey::E as u32) == vk && pressed {
+                            tasks.enqueue(TaskType::Overlay(OverlayTask::ToggleEditMode));
+                        } else if (hid::VirtualKey::D as u32) == vk && pressed {
+                            tasks.enqueue(TaskType::Overlay(OverlayTask::ToggleDashboard));
+                        } else if (hid::VirtualKey::T as u32) == vk && pressed {
+                            tasks.enqueue(TaskType::Overlay(OverlayTask::ToggleOverlay(
+                                OverlaySelector::Name(KEYBOARD_NAME.into()),
+                                ToggleMode::Toggle,
+                            )));
+                        } else if (hid::VirtualKey::R as u32) == vk && pressed {
+                            tasks.enqueue(TaskType::Overlay(OverlayTask::ShowHide));
+                        } else if ((hid::VirtualKey::N1 as u32) == vk
+                            || (hid::VirtualKey::KP_1 as u32) == vk)
+                            && pressed
+                        {
+                            tasks.enqueue(TaskType::Overlay(OverlayTask::ToggleSet(0)));
+                        } else if ((hid::VirtualKey::N2 as u32) == vk
+                            || (hid::VirtualKey::KP_2 as u32) == vk)
+                            && pressed
+                        {
+                            tasks.enqueue(TaskType::Overlay(OverlayTask::ToggleSet(1)));
+                        } else if ((hid::VirtualKey::N3 as u32) == vk
+                            || (hid::VirtualKey::KP_3 as u32) == vk)
+                            && pressed
+                        {
+                            tasks.enqueue(TaskType::Overlay(OverlayTask::ToggleSet(2)));
+                        } else if ((hid::VirtualKey::N4 as u32) == vk
+                            || (hid::VirtualKey::KP_4 as u32) == vk)
+                            && pressed
+                        {
+                            tasks.enqueue(TaskType::Overlay(OverlayTask::ToggleSet(3)));
+                        } else if ((hid::VirtualKey::N5 as u32) == vk
+                            || (hid::VirtualKey::KP_5 as u32) == vk)
+                            && pressed
+                        {
+                            tasks.enqueue(TaskType::Overlay(OverlayTask::ToggleSet(4)));
+                        } else if ((hid::VirtualKey::N6 as u32) == vk
+                            || (hid::VirtualKey::KP_6 as u32) == vk)
+                            && pressed
+                        {
+                            tasks.enqueue(TaskType::Overlay(OverlayTask::ToggleSet(5)));
+                        }
+                    } else if self.has_input_focus {
+                        self.manager.send_key(vk, pressed);
+                    } else if let Some(vk) = hid::VirtualKey::from_repr(vk as u16) {
+                        hid_wrapper.inner.send_key(vk, pressed);
+                    }
+                }
+                input_capture::CapturedEvent::PointerButton { button, pressed } => {
+                    let Some(mouse_index) = Self::button_to_mouse_index(button) else {
+                        continue;
+                    };
+                    if input_state.picking_focus.is_aiming() {
+                        match mouse_index {
+                            MouseIndex::Left => input_state.handsfree_state.click = pressed,
+                            MouseIndex::Right => {
+                                input_state.handsfree_state.click = pressed;
+                                input_state.handsfree_state.click_modifier_right = pressed;
+                            }
+                            MouseIndex::Center if pressed => {
+                                tasks.enqueue(TaskType::Overlay(OverlayTask::ToggleEditMode));
+                            }
+                            _ => {}
+                        }
+                    } else if self.has_input_focus {
+                        self.manager.send_pointer_button(mouse_index, pressed);
+                    } else {
+                        hid_wrapper.inner.send_button(button as u16, pressed);
+                    }
+                }
+                input_capture::CapturedEvent::PointerMotion {
+                    dx,
+                    dy,
+                    dx_raw,
+                    dy_raw,
+                } => {
+                    mouse_delta += DVec2 { x: dx, y: dy };
+                    mouse_delta_raw += DVec2 {
+                        x: dx_raw,
+                        y: dy_raw,
+                    };
+                }
+                input_capture::CapturedEvent::PointerAxis {
+                    horizontal_v120,
+                    vertical_v120,
+                } => {
+                    let mut delta = WheelDelta {
+                        x: horizontal_v120 as f32,
+                        y: vertical_v120 as f32,
+                    };
+                    if input_state.picking_focus.is_aiming() {
+                        input_state.handsfree_state.scroll_y = (vertical_v120 as f32) * -0.12;
+                    } else if self.has_input_focus {
+                        self.manager.send_pointer_axis_wheel_raw(delta);
+                    } else {
+                        delta.y *= -1.0;
+                        hid_wrapper.inner.wheel(delta);
+                    }
+                }
+                input_capture::CapturedEvent::Grabbed => {
+                    audio_sample_player.play_sample(audio_system, "input_grab");
+                    if !self.grab_toast_sent {
+                        self.grab_toast_sent = true;
+                        let text = &globals.i18n().translate("NOTIFICATION.WE_ARE_GRABBING");
+                        let _ = DbusConnector::notify_send("WayVR", text, 1, 5000, 0, true);
+                    }
+                }
+                input_capture::CapturedEvent::Ungrabbed => {
+                    hid_wrapper.inner.send_key(hid::VirtualKey::LSuper, false);
+                    hid_wrapper.inner.send_key(hid::VirtualKey::RSuper, false);
+                    self.manager.release_all_keys();
+                    self.has_input_focus = false;
+                    self.wm.keyboard_focus = None;
+                    audio_sample_player.play_sample(audio_system, "input_ungrab");
+                }
+                input_capture::CapturedEvent::KeyCombo { combo, pressed } => match combo {
+                    input_capture::KeyCombo::CloseApp if pressed => {
+                        if let Some(hover) = self.wm.mouse.as_mut() {
+                            let window_handle = hover.hover_window;
+                            self.close_window(window_handle);
+                        }
+                    }
+                    input_capture::KeyCombo::SwitchApp => {
+                        if pressed {
+                            input_state.picking_focus = super::input::FocusPickState::Aiming;
+                            tasks.enqueue(TaskType::Overlay(OverlayTask::Modify(
+                                OverlaySelector::Name(ALTTAB_HELP_NAME.clone()),
+                                Box::new(move |app, o| {
+                                    o.activate(app, true);
+                                }),
+                            )));
+                        } else {
+                            input_state.picking_focus = super::input::FocusPickState::Picking;
+
+                            tasks.enqueue(TaskType::Overlay(OverlayTask::Modify(
+                                OverlaySelector::Name(ALTTAB_HELP_NAME.clone()),
+                                Box::new(move |_app, o| {
+                                    o.deactivate();
+                                }),
+                            )));
+                            tasks.enqueue_at(
+                                TaskType::Global(Box::new(|app| {
+                                    app.input_state.stop_picking();
+
+                                    let _ = std::mem::take(&mut app.input_state.handsfree_state);
+                                })),
+                                Instant::now() + Duration::from_millis(50),
+                            );
+                        }
+                    }
+                    _ => {}
+                },
+            }
         }
-        self.mouse_freeze = Instant::now() + Duration::from_millis(1); // prevent other pointer from moving the mouse on the same frame
+
+        if mouse_delta.length_squared() > 1e-6 {
+            if self.has_input_focus {
+                'mouse_update: {
+                    let Some(ref hover) = self.wm.mouse else {
+                        break 'mouse_update;
+                    };
+
+                    let Some(window) = self.wm.windows.get(hover.hover_window) else {
+                        break 'mouse_update;
+                    };
+                    let toplevel = window.toplevel.wl_surface().clone();
+                    let inner_extent = with_states(&toplevel, |states| {
+                        SurfaceBufWithImage::get_from_surface(states)
+                            .map_or([1, 1], |s| s.image.extent_u32arr())
+                    });
+
+                    let hit_ctx = build_hit_context(
+                        &toplevel,
+                        &self.manager.state.popup_manager,
+                        inner_extent,
+                    );
+
+                    let new_x = (hover.pos.x + mouse_delta.x).clamp(0., inner_extent[0] as f64);
+                    let new_y = (hover.pos.y + mouse_delta.y).clamp(0., inner_extent[1] as f64);
+                    let new_pos = DVec2::new(new_x, new_y);
+                    let new_pos_f32 = Vec2::new(new_x as f32, new_y as f32);
+
+                    let target = hit_ctx.hit_target_at(new_pos_f32);
+                    let focus_target = self.hit_target_to_focus(
+                        target.unwrap_or(WvrHitTarget::Toplevel { pos: new_pos_f32 }),
+                        hover.hover_window,
+                        new_pos_f32,
+                    );
+                    self.send_mouse_move_relative(
+                        focus_target,
+                        new_pos,
+                        mouse_delta,
+                        mouse_delta_raw,
+                        hover.hover_window,
+                    );
+                }
+            } else {
+                // no has_input_focus → send back to desktop
+                hid_wrapper.inner.mouse_move_rel(mouse_delta);
+            }
+        }
+    }
+
+    const fn button_to_mouse_index(button: u32) -> Option<MouseIndex> {
+        match button {
+            272 => Some(MouseIndex::Left),
+            273 => Some(MouseIndex::Right),
+            274 => Some(MouseIndex::Center),
+            _ => None,
+        }
+    }
+
+    /// Use HidWrapper::set_input_focus instead!!!
+    pub const fn set_input_focus(&mut self, has_focus: bool) {
+        self.has_input_focus = has_focus;
+        if !has_focus {
+            self.wm.mouse = None;
+        }
+    }
+
+    pub const fn get_focused_window(&self) -> Option<window::WindowHandle> {
+        if !self.has_input_focus {
+            return None;
+        }
+        self.wm.keyboard_focus
+    }
+
+    fn get_mouse_focus(
+        &mut self,
+        target: PointerFocusTarget,
+        hover_window: window::WindowHandle,
+        pressed: bool,
+    ) -> (Option<(WlSurface, Vec2)>, Option<WlSurface>) {
+        match target {
+            PointerFocusTarget::Surface { surface, origin } => (Some((surface, origin)), None),
+            PointerFocusTarget::Toplevel => {
+                let surface = self
+                    .wm
+                    .windows
+                    .get(hover_window)
+                    .map(|x| x.toplevel.wl_surface().clone());
+
+                (
+                    surface.clone().map(|surface| (surface, Vec2::ZERO)),
+                    pressed.then_some(surface).flatten(),
+                )
+            }
+            PointerFocusTarget::None => {
+                let surface = self
+                    .wm
+                    .windows
+                    .get(hover_window)
+                    .map(|x| x.toplevel.wl_surface().clone());
+                (None, pressed.then_some(surface).flatten())
+            }
+        }
+    }
+
+    fn get_mouse_relative(&self, global_pos: DVec2, hover_window: window::WindowHandle) -> DVec2 {
+        let Some(ref mouse) = self.wm.mouse else {
+            return DVec2::ZERO;
+        };
+        if hover_window != mouse.hover_window {
+            // don't twitch if we just switched windows
+            return DVec2::ZERO;
+        }
+        global_pos - mouse.pos
+    }
+
+    fn send_mouse_move_relative(
+        &mut self,
+        target: PointerFocusTarget,
+        global_pos: DVec2,
+        delta: DVec2,
+        delta_unaccel: DVec2,
+        hover_window: window::WindowHandle,
+    ) {
+        let (focus, _) = self.get_mouse_focus(target, hover_window, false);
+
+        self.manager
+            .send_mouse_move(focus, global_pos, delta, delta_unaccel);
+        self.mouse_freeze = Instant::now() + Duration::from_millis(1);
         self.wm.mouse = Some(window::MouseState {
-            hover_window: handle,
-            x,
-            y,
+            hover_window,
+            pos: global_pos,
         });
     }
 
-    pub fn send_mouse_down(
+    pub fn send_mouse_move(
         &mut self,
-        click_freeze: i32,
-        handle: window::WindowHandle,
-        index: MouseIndex,
+        target: PointerFocusTarget,
+        global_pos: Vec2,
+        hover_window: window::WindowHandle,
+        picking_focus: bool,
     ) {
-        self.mouse_freeze = Instant::now() + Duration::from_millis(click_freeze as _);
-
-        if let Some(window) = self.wm.windows.get_mut(&handle) {
-            window.send_mouse_down(&mut self.manager, index);
+        if self.mouse_freeze > Instant::now() {
+            return;
         }
+
+        let global_pos = DVec2::from(global_pos);
+
+        let (focus, focus_keyboard) = self.get_mouse_focus(target, hover_window, picking_focus);
+        if focus_keyboard.is_some() {
+            self.manager.seat_keyboard.set_focus(
+                &mut self.manager.state,
+                focus_keyboard,
+                self.manager.serial_counter.next_serial(),
+            );
+
+            self.wm.keyboard_focus = Some(hover_window);
+        }
+
+        let linear_delta = self.get_mouse_relative(global_pos, hover_window);
+        self.manager
+            .send_mouse_move(focus, global_pos, linear_delta, linear_delta);
+        self.mouse_freeze = Instant::now() + Duration::from_millis(1);
+        self.wm.mouse = Some(window::MouseState {
+            hover_window,
+            pos: global_pos,
+        });
     }
 
-    pub fn send_mouse_up(&mut self, index: MouseIndex) {
-        Window::send_mouse_up(&mut self.manager, index);
+    pub fn send_mouse_button(
+        &mut self,
+        target: PointerFocusTarget,
+        global_pos: Vec2,
+        hover_window: window::WindowHandle,
+        index: MouseIndex,
+        pressed: bool,
+        click_freeze: i32,
+    ) {
+        if pressed {
+            self.mouse_freeze = Instant::now() + Duration::from_millis(click_freeze.max(0) as u64);
+        }
+
+        let (focus, focus_keyboard) = self.get_mouse_focus(target, hover_window, pressed);
+
+        if focus_keyboard.is_some() {
+            self.manager.seat_keyboard.set_focus(
+                &mut self.manager.state,
+                focus_keyboard,
+                self.manager.serial_counter.next_serial(),
+            );
+
+            self.wm.keyboard_focus = Some(hover_window);
+        }
+
+        let global_pos = DVec2::from(global_pos);
+        let linear_delta = self.get_mouse_relative(global_pos, hover_window);
+
+        self.manager
+            .send_mouse_move(focus, global_pos, linear_delta, linear_delta);
+        self.wm.mouse = Some(window::MouseState {
+            hover_window,
+            pos: global_pos,
+        });
+        self.manager.send_pointer_button(index, pressed);
     }
 
-    pub fn send_mouse_scroll(&mut self, delta: WheelDelta) {
-        Window::send_mouse_scroll(&mut self.manager, delta);
+    pub fn send_mouse_scroll(
+        &mut self,
+        hover_window: window::WindowHandle,
+        global_pos: Vec2,
+        delta: WheelDelta,
+    ) {
+        let global_pos = DVec2::from(global_pos);
+        self.wm.mouse = Some(window::MouseState {
+            hover_window,
+            pos: global_pos,
+        });
+
+        self.manager.send_pointer_axis_wheel_accumulated(delta);
     }
 
     pub fn send_key(&mut self, virtual_key: u32, down: bool) {
@@ -626,9 +1219,13 @@ impl WvrServerState {
         self.cur_modifiers = modifiers;
     }
 
+    pub fn set_clipboard(&mut self, content: &str) {
+        self.manager.state.set_clipboard_text(content);
+    }
+
     pub fn add_external_process(&mut self, pid: u32) -> process::ProcessHandle {
         self.processes
-            .add(process::Process::External(process::ExternalProcess { pid }))
+            .insert(process::Process::External(process::ExternalProcess { pid }))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -650,8 +1247,8 @@ impl WvrServerState {
             exec_path.ends_with("flatpak") && args.first().is_some_and(|a| *a == "run");
 
         let mut cmd = std::process::Command::new(exec_path);
-        self.configure_env(&mut cmd, auth_key.as_str(), is_flatpak);
-        cmd.args(args);
+        self.configure_env(&mut cmd, auth_key.as_str(), is_flatpak, args);
+
         if let Some(working_dir) = working_dir {
             cmd.current_dir(working_dir);
         }
@@ -664,7 +1261,7 @@ impl WvrServerState {
 
         let handle = self
             .processes
-            .add(process::Process::Managed(process::WayVRProcess {
+            .insert(process::Process::Managed(process::WayVRProcess {
                 auth_key,
                 child,
                 exec_path: String::from(exec_path),
@@ -681,26 +1278,62 @@ impl WvrServerState {
                 pos_mode,
             }));
 
-        self.signals.send(WayVRSignal::BroadcastStateChanged(
-            packet_server::WvrStateChanged::ProcessCreated,
-        ));
-
         Ok(handle)
     }
 
-    fn configure_env(&self, cmd: &mut std::process::Command, auth_key: &str, is_flatpak: bool) {
-        cmd.env_remove("DISPLAY"); // Goodbye X11
-        cmd.env(
-            "WAYLAND_DISPLAY",
-            self.manager.wayland_env.display_num_string(),
-        );
+    fn configure_env(
+        &self,
+        cmd: &mut std::process::Command,
+        auth_key: &str,
+        is_flatpak: bool,
+        args: &[&str],
+    ) {
+        let wayland_display = self.manager.wayland_env.wayland_display_num_string();
+        let x11_display = self.manager.wayland_env.display_num_string();
+
+        // these go to env for flatpak as well
+        cmd.env("WAYLAND_DISPLAY", wayland_display);
+        cmd.env("DISPLAY", x11_display);
 
         if is_flatpak {
-            // doesn't seem to work all that well
+            // need to inject --env after "run" because --env is a
+            // "flatpak run" arg, not a global "flatpak" arg
+            let mut iter = args.iter();
+
+            if let Some(first) = iter.next() {
+                // add "run"
+                cmd.arg(first);
+            } else {
+                // idk so let's just bail
+                return;
+            }
+
+            // add args for "flatpak run"
             cmd.arg(format!("--env=WAYVR_DISPLAY_AUTH={auth_key}"));
-        } else {
-            cmd.env("WAYVR_DISPLAY_AUTH", auth_key);
+            cmd.arg("--env=GDK_BACKEND=wayland,x11");
+            cmd.arg("--env=QT_QPA_PLATFORM=wayland;xcb");
+            cmd.arg("--env=SDL_VIDEODRIVER=wayland");
+            cmd.arg("--env=CLUTTER_BACKEND=wayland");
+            cmd.arg("--env=MOZ_ENABLE_WAYLAND=1");
+            cmd.arg("--env=ELECTRON_OZONE_PLATFORM_HINT=wayland");
+
+            // flatpak app id / remaining args
+            for arg in iter {
+                cmd.arg(arg);
+            }
+
+            return;
         }
+
+        cmd.env("WAYVR_DISPLAY_AUTH", auth_key);
+        cmd.env("GDK_BACKEND", "wayland,x11");
+        cmd.env("QT_QPA_PLATFORM", "wayland;xcb");
+        cmd.env("SDL_VIDEODRIVER", "wayland");
+        cmd.env("CLUTTER_BACKEND", "wayland");
+        cmd.env("MOZ_ENABLE_WAYLAND", "1");
+        cmd.env("ELECTRON_OZONE_PLATFORM_HINT", "wayland");
+
+        cmd.args(args);
     }
 }
 
@@ -711,6 +1344,7 @@ fn generate_auth_key() -> String {
 
 struct SurfaceBufWithImageContainer {
     inner: RefCell<SurfaceBufWithImage>,
+    retained_dmabuf_buffer: RefCell<Option<wl_buffer::WlBuffer>>,
 }
 
 #[derive(Clone)]
@@ -723,15 +1357,22 @@ pub struct SurfaceBufWithImage {
 }
 
 impl SurfaceBufWithImage {
-    fn apply_to_surface(self, surface_data: &SurfaceData) {
+    fn apply_to_surface(
+        self,
+        surface_data: &SurfaceData,
+        retained_buffer: Option<wl_buffer::WlBuffer>,
+    ) -> Option<wl_buffer::WlBuffer> {
         if let Some(container) = surface_data.data_map.get::<SurfaceBufWithImageContainer>() {
             container.inner.replace(self);
+            container.retained_dmabuf_buffer.replace(retained_buffer)
         } else {
             surface_data
                 .data_map
                 .insert_if_missing(|| SurfaceBufWithImageContainer {
                     inner: RefCell::new(self),
+                    retained_dmabuf_buffer: RefCell::new(retained_buffer),
                 });
+            None
         }
     }
 

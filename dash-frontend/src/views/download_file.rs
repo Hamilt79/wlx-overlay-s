@@ -51,6 +51,9 @@ pub struct View {
 	id_content: WidgetID,
 	on_close_request: Option<Box<dyn FnOnce()>>,
 	on_downloaded: Option<Box<dyn FnOnce()>>,
+
+	// will cancel on Drop
+	task_downloader: Option<smol::Task<Option<()>>>,
 }
 
 fn doc_params(globals: &WguiGlobals) -> ParseDocumentParams<'_> {
@@ -63,67 +66,66 @@ fn doc_params(globals: &WguiGlobals) -> ParseDocumentParams<'_> {
 
 impl ViewTrait for View {
 	fn update(&mut self, par: &mut ViewUpdateParams) -> anyhow::Result<()> {
-		for task in self.tasks.drain() {
-			match task {
-				Task::StartDownload(url, path) => {
-					if let Some(on_downloaded) = self.on_downloaded.take() {
-						self
-							.executor
-							.spawn(View::download(
+		while !self.tasks.is_empty() {
+			for task in self.tasks.drain() {
+				match task {
+					Task::StartDownload(url, path) => {
+						if let Some(on_downloaded) = self.on_downloaded.take() {
+							self.task_downloader = Some(self.executor.spawn(View::download(
 								self.tasks.clone(),
-								self.executor.clone(),
 								url,
 								path,
 								on_downloaded,
-							))
-							.detach();
+							)));
+						}
 					}
-				}
-				Task::SetStatusText(text) => {
-					let widgets = &mut par.layout.state.widgets;
-					widgets
-						.fetch(self.id_label_status)?
-						.cast::<WidgetLabel>()?
-						.set_text(&mut par.layout.common(), Translation::from_raw_text_string(text));
-				}
-				Task::ShowIconSuccess => {
-					par.layout.remove_children(self.id_loading_parent);
-					wgui_simple::create_icon(
-						par.layout,
-						self.id_loading_parent,
-						Vec2::splat(32.0),
-						AssetPath::BuiltIn("dashboard/check.svg"),
-					)?;
-
-					// "Close window" button
-					self
-						.parser_state
-						.realize_template(
-							&doc_params(&self.globals),
-							"btn_close",
+					Task::SetStatusText(text) => {
+						let widgets = &mut par.layout.state.widgets;
+						widgets
+							.fetch(self.id_label_status)?
+							.cast::<WidgetLabel>()?
+							.set_text(&mut par.layout.common(), Translation::from_raw_text_string(text));
+					}
+					Task::ShowIconSuccess => {
+						par.layout.remove_children(self.id_loading_parent);
+						wgui_simple::create_icon(
 							par.layout,
-							self.id_content,
-							Default::default(),
-						)?
-						.fetch_component_as::<ComponentButton>("btn")?
-						.on_click(self.tasks.get_button_click_callback(Task::Close));
-				}
-				Task::ShowIconError => {
-					par.layout.remove_children(self.id_loading_parent);
-					wgui_simple::create_icon(
-						par.layout,
-						self.id_loading_parent,
-						Vec2::splat(32.0),
-						AssetPath::BuiltIn("dashboard/error.svg"),
-					)?;
-				}
-				Task::Close => {
-					if let Some(on_close) = self.on_close_request.take() {
-						on_close();
+							self.id_loading_parent,
+							Vec2::splat(32.0),
+							AssetPath::BuiltIn("dashboard/check.svg"),
+						)?;
+
+						// "Close window" button
+						self
+							.parser_state
+							.realize_template(
+								&doc_params(&self.globals),
+								"btn_close",
+								par.layout,
+								self.id_content,
+								Default::default(),
+							)?
+							.fetch_component_as::<ComponentButton>("btn")?
+							.on_click(self.tasks.get_button_click_callback(Task::Close));
+					}
+					Task::ShowIconError => {
+						par.layout.remove_children(self.id_loading_parent);
+						wgui_simple::create_icon(
+							par.layout,
+							self.id_loading_parent,
+							Vec2::splat(32.0),
+							AssetPath::BuiltIn("dashboard/error.svg"),
+						)?;
+					}
+					Task::Close => {
+						if let Some(on_close) = self.on_close_request.take() {
+							on_close();
+						}
 					}
 				}
 			}
 		}
+
 		Ok(())
 	}
 }
@@ -158,7 +160,7 @@ impl View {
 
 		wgui_simple::create_loading(wgui_simple::CreateLoadingParams {
 			parent_id: id_loading_parent,
-			layout: layout,
+			layout,
 			with_text: false,
 		})?;
 
@@ -184,43 +186,19 @@ impl View {
 			id_content,
 			on_close_request: Some(on_close_request),
 			on_downloaded: Some(par.on_downloaded),
+			task_downloader: None,
 		})
 	}
 
 	async fn download(
 		tasks: Tasks<Task>,
-		executor: AsyncExecutor,
 		url: String,
 		target_path: PathBuf,
 		on_downloaded: Box<dyn FnOnce()>,
 	) -> Option<()> {
 		tasks.push(Task::SetStatusText(String::from("Connecting to the server...")));
 
-		// start downloading from the server with progress reporting
-		let res = handle_async_result(
-			"Download failed",
-			&tasks,
-			http_client::get(http_client::GetParams {
-				executor: &executor,
-				url: &url,
-				on_progress: Some(Box::new({
-					let tasks = tasks.clone();
-					move |data: ProgressFuncData| {
-						tasks.push(Task::SetStatusText(format!(
-							"{}/{} KiB ({}%)",
-							data.bytes_downloaded / 1024,
-							data.file_size / 1024,
-							(data.bytes_downloaded as f32 / data.file_size as f32 * 100.0).round()
-						)))
-					}
-				})),
-			})
-			.await,
-		)?;
-
-		tasks.push(Task::SetStatusText(String::from("Writing to file...")));
-
-		// create skymaps directory if it doesn't exist yet
+		// create parent directory if it doesn't exist yet
 		if let Some(parent) = target_path.parent() {
 			handle_async_result(
 				"Directory creation failed",
@@ -229,10 +207,30 @@ impl View {
 			)?;
 		}
 
+		// start downloading from the server with progress reporting
 		handle_async_result(
-			"File write failed",
+			"Download failed",
 			&tasks,
-			smol::fs::write(target_path, res.data).await,
+			http_client::download_to_file(
+				http_client::GetParams {
+					url: &url,
+					on_progress: Some(Box::new({
+						let tasks = tasks.clone();
+						move |data: ProgressFuncData| {
+							if tasks.len() < 100 {
+								tasks.push(Task::SetStatusText(format!(
+									"{}/{} MiB ({}%)",
+									data.bytes_downloaded / 1024 / 1024,
+									data.file_size / 1024 / 1024,
+									(data.bytes_downloaded as f32 / data.file_size as f32 * 100.0).round()
+								)))
+							}
+						}
+					})),
+				},
+				&target_path,
+			)
+			.await,
 		)?;
 
 		tasks.push(Task::SetStatusText(String::from("Download finished")));
@@ -261,5 +259,6 @@ pub fn mount_popup(
 				popup.set_view(data.handle, view, Some(on_view_close));
 				Ok(popup.get_close_callback(data.layout))
 			}),
+			Default::default(), /* extra */
 		)));
 }

@@ -34,18 +34,12 @@ pub struct Params<'a> {
 	pub on_updated_library: Rc<dyn Fn()>,
 }
 
+type SetSkymapPreview = (Uuid, Option<(CustomGlyphData, Rc<Vec<u8>>)>);
+
 #[derive(Clone)]
 enum Task {
 	SetSkymapCatalog(Rc<anyhow::Result<networking::skymap_catalog::SkymapCatalog>>),
-	SetSkymapPreview(
-		(
-			SkymapUuid,
-			Option<(
-				CustomGlyphData, /* ready-to-use preview image data */
-				Rc<Vec<u8>>,     /* compressed preview image data (should weigh about 10-15 KiB) */
-			)>,
-		),
-	),
+	SetSkymapPreview(SetSkymapPreview),
 	ShowRemoteSkymapDownloader(SkymapUuid),
 	RefreshCells,
 }
@@ -70,9 +64,7 @@ pub struct View {
 }
 
 fn get_entry_by_uuid(catalog: &SkymapCatalog, skymap_uuid: Uuid) -> Option<&SkymapCatalogEntry> {
-	let Some(entry) = catalog.entries.iter().find(|entry| entry.uuid == skymap_uuid) else {
-		return None;
-	};
+	let entry = catalog.entries.iter().find(|entry| entry.uuid == skymap_uuid)?;
 
 	Some(entry)
 }
@@ -127,8 +119,8 @@ impl ViewTrait for View {
 }
 
 impl View {
-	async fn skymap_catalog_request_wrapper(tasks: Tasks<Task>, executor: AsyncExecutor) {
-		let res = networking::skymap_catalog::request_catalog(&executor).await;
+	async fn skymap_catalog_request_wrapper(tasks: Tasks<Task>) {
+		let res = networking::skymap_catalog::request_catalog().await;
 		tasks.push(Task::SetSkymapCatalog(Rc::new(res)))
 	}
 
@@ -139,7 +131,7 @@ impl View {
 			with_text: true,
 		})?;
 		let tasks = Tasks::<Task>::new();
-		let fut = View::skymap_catalog_request_wrapper(tasks.clone(), par.executor.clone());
+		let fut = View::skymap_catalog_request_wrapper(tasks.clone());
 		par.executor.spawn(fut).detach();
 		Ok(Self {
 			id_parent: par.parent_id,
@@ -155,15 +147,10 @@ impl View {
 		})
 	}
 
-	async fn request_skymap_preview(
-		globals: WguiGlobals,
-		executor: AsyncExecutor,
-		entry: SkymapCatalogEntry,
-		tasks: Tasks<Task>,
-	) {
+	async fn request_skymap_preview(globals: WguiGlobals, entry: SkymapCatalogEntry, tasks: Tasks<Task>) {
 		tasks.push(Task::SetSkymapPreview((
 			entry.uuid,
-			networking::image_fetch::fetch_to_glyph_data(&globals, &executor, &entry.files.get_url_preview())
+			networking::image_fetch::fetch_to_glyph_data(&globals, &entry.files.get_url_preview())
 				.await
 				.ok(),
 		)));
@@ -176,7 +163,7 @@ impl View {
 		};
 
 		for cell in &mut self.mounted_cells {
-			if let Some(entry) = get_entry_by_uuid(&catalog, cell.skymap_uuid) {
+			if let Some(entry) = get_entry_by_uuid(catalog, cell.skymap_uuid) {
 				cell.view.refresh_resolution_pips(layout, entry)?;
 			}
 		}
@@ -195,23 +182,18 @@ impl View {
 			extra: Default::default(),
 		};
 
-		let parser_state = wgui::parser::parse_from_assets(&doc_params, layout, self.id_parent)?;
+		let parser_state = wgui::parser::parse_from_assets(doc_params, layout, self.id_parent)?;
 
 		let id_list = parser_state.fetch_widget(&layout.state, "list")?.id;
 
 		for entry in &catalog.entries {
-			let task = View::request_skymap_preview(
-				self.globals.clone(),
-				self.executor.clone(),
-				entry.clone(),
-				self.tasks.clone(),
-			);
+			let task = View::request_skymap_preview(self.globals.clone(), entry.clone(), self.tasks.clone());
 
-			let skymap_uuid = entry.uuid.clone();
+			let skymap_uuid = entry.uuid;
 
 			self.mounted_cells.push(MountedCell {
 				preview_image_compressed: None,
-				skymap_uuid: entry.uuid.clone(),
+				skymap_uuid: entry.uuid,
 				view: views::skymap_list_cell::View::new(views::skymap_list_cell::Params {
 					id_parent: id_list,
 					layout,
@@ -240,7 +222,7 @@ impl View {
 			return Ok(());
 		};
 
-		let Some(entry) = get_entry_by_uuid(&catalog, uuid) else {
+		let Some(entry) = get_entry_by_uuid(catalog, uuid) else {
 			return Ok(());
 		};
 
@@ -273,13 +255,8 @@ impl View {
 		skymap_uuid: SkymapUuid,
 	) -> Option<(CustomGlyphData, Rc<Vec<u8>> /* preview_image_compressed */)> {
 		if let Some(cell) = &self.mounted_cells.iter().find(|mc| mc.skymap_uuid == skymap_uuid) {
-			let Some(image) = cell.view.get_image() else {
-				return None;
-			};
-
-			let Some(preview_image_compressed) = cell.preview_image_compressed.clone() else {
-				return None;
-			};
+			let image = cell.view.get_image()?;
+			let preview_image_compressed = cell.preview_image_compressed.clone()?;
 			return Some((image, preview_image_compressed));
 		}
 		None
@@ -310,5 +287,6 @@ pub fn mount_popup(
 				popup.set_view(data.handle, view, None);
 				Ok(popup.get_close_callback(data.layout))
 			}),
+			Default::default(), /* extra */
 		)));
 }

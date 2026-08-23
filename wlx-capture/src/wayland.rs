@@ -17,7 +17,6 @@ use smithay_client_toolkit::reexports::{
     },
 };
 
-pub use wayland_client;
 use wayland_client::{
     Connection, Dispatch, EventQueue, Proxy, QueueHandle,
     backend::WaylandError,

@@ -1,22 +1,38 @@
 {
+	"DEFINITIONS": {
+		"ANCHORED": "Anchored",
+		"FLOATING": "Floating",
+		"STATIC": "Static",
+		"SET": "Set",
+		"WATCH": "Watch",
+		"DASHBOARD": "Dashboard",
+		"EDIT_MODE": "Edit Mode",
+		"MIRROR": "Mirror",
+		"SETTINGS": "Settings",
+		"KEYBOARD": "Keyboard",
+		"TASKBAR": "Taskbar",
+		"FEATURES": "Features",
+		"OVERLAY": "Overlay"
+	},
 	"ANCHOR": {
 		"CENTER": "Center"
 	},
 	"BAR": {
 		"ADD_MIRROR": "Add a new mirror overlay",
 		"ADD_NEW_SET": "Add new set",
+		"ADD_PASSTHRU": "Add new pass-through cutout",
 		"CLOSE_APP": "Close app",
-		"CLOSE_MIRROR": "Close mirror",
+		"CLOSE_OVERLAY": "Close overlay",
 		"DELETE_CURRENT_SET": "Delete current set",
 		"EDIT_MODE_TOGGLE": "Toggle edit mode",
 		"FORCE_CLOSE_APP": "Force close app",
 		"HANDSFREE": {
-			"EYE_ONLY": "Eye only",
+			"EYE_ONLY": "Eye laser",
 			"EYE_TRACKING": "Eye + pinch",
 			"HMD": "HMD + pinch",
-			"HMD_ONLY": "HMD only",
+			"HMD_ONLY": "HMD laser",
 			"NONE": "Off",
-			"TITLE": "Handsfree mode"
+			"TITLE": "Hands-free mode"
 		},
 		"RELOAD_FROM_DISK": "Reload XML from disk",
 		"RESET_POSITION": "Reset position",
@@ -56,7 +72,7 @@
 		},
 		"MOVE_PRESS_AND_DRAG": "Move (press & drag)",
 		"OPACITY": "Opacity",
-		"POS_ANCHORED": "Anchored: Moves with center marker. Default.",
+		"POS_ANCHORED": "Anchored: Moves together with set. Default.",
 		"POS_FLOATING": "Floating: Moves independently, recenters when shown.",
 		"POS_HAND_L": "Follow the left hand.",
 		"POS_HAND_R": "Follow the right hand.",
@@ -64,6 +80,7 @@
 		"POS_STATIC": "Static: Not part of any set, no recenter.",
 		"POSITIONING": "Positioning",
 		"RESIZE_PRESS_AND_DRAG": "Resize (press & drag)",
+		"RESIZE_CORNER": "Drag to resize",
 		"STEREO_3D_MODE": {
 			"ADJUST_MOUSE": "Adjust mouse",
 			"FULL_FRAME": "Full 3D",
@@ -77,10 +94,26 @@
 			"TITLE": "3D Stereo Mode"
 		}
 	},
+	"ALTTAB": {
+		"RELEASE_TO_FOCUS": "Aim at an app and release Super to focus that app.",
+		"WHILE_AIMING": "While aiming",
+		"CLICK": "VR pointer click",
+		"GRABALL": "Move entire set",
+		"GRAB": "Move individual overlay",
+		"DASH": "Toggle dashboard",
+		"EDIT": "Toggle edit mode",
+		"SET": "Switch set",
+		"RECENTER": "Show/hide/recenter",
+		"GENERAL_BINDS": "General bindings",
+		"TOGGLE_CAPTURE": "Give control back to desktop",
+		"FOCUS_MODE": "Focus mode (hold Super)",
+		"CLOSE": "Close focused app",
+		"MOUSE": "Real mouse clicks & scroll also translate to VR pointer"
+	},
 	"GRAB": {
 		"ADJUST_DISTANCE": "Adjust distance",
 		"ADJUST_SIZE": "Adjust size",
-		"GRABBING_ANCHORED": "Anchored overlays all move together. Separate a single window by grabbing it with the other hand while still grabbing the anchor.",
+		"GRABBING_ANCHORED": "Anchored overlays move with the set. Separate a single window by grabbing it with the other hand while still grabbing the set.",
 		"GRABBING_ANCHORED_EDIT": "This overlay will stay anchored to the center marker.",
 		"GRABBING_FLOATING": "This overlay is Floating and will stay in place, unless recentered.",
 		"GRABBING_FOLLOW": "This overlay will follow the device it is attached to.",
@@ -88,7 +121,15 @@
 		"GRABBING_WATCH": "To swap hands, move the watch in front and grab it with the other hand.",
 		"UNRESTRICTED_MOVEMENT": "Unrestricted movement"
 	},
+	"SCREENCAST": {
+		"PENDING": "Please wait...",
+		"QUEUED": "Waiting for a different overlay's screen cast pop-up to be approved.",
+		"WAITING_FOR_USER_DESC": "Check your desktop for a screen cast pop-up.\nSelect the following:",
+		"WAITING_FOR_USER": "Check your desktop for a screen cast pop-up.",
+		"FAIL": "Could not initialize screen cast source."
+	},
 	"TOAST": {
+		"TITLE_SCREENCAST_FAIL": "Could not start screen cast source!",
 		"CANNOT_ADD_SET": "Cannot add set!",
 		"CANNOT_REMOVE_SET": "Cannot remove set!",
 		"DEFAULT_TITLE": "Notification",
@@ -96,8 +137,10 @@
 		"ERROR": "Error",
 		"FIXING_FLOOR_IN_X_SECS": "Fixing floor in {SECONDS} second(s)...",
 		"LAST_EXISTING_SET": "This is the last existing set.",
-		"LETS_ADD_OVERLAYS": "Let's add some overlays from the watch!",
+		"LETS_ADD_OVERLAYS": "Let's add some overlays from the taskbar!",
 		"MAXIMUM_SETS_REACHED": "Maximum number of sets reached.",
+		"NO_KEYMAPS_CONFIGURED": "No keyboard layouts configured",
+		"NO_KEYMAPS_CONFIGURED_HELP": "Check the wayvr.org on how to set up your keyboard layouts!",
 		"NO_SET_SELECTED": "No set is selected.",
 		"ONE_CONTROLLER_ON_FLOOR": "Place one controller on the floor!"
 	},
@@ -106,11 +149,32 @@
 		"CLEANUP_MIRRORS": "Remove mirrors that are\nnot currently visible",
 		"DASHBOARD": "Dashboard",
 		"EDIT_MODE": "Edit Mode",
-		"EDIT_MODE_EXPLANATION": "Overlays can now be moved and tuned individually.\nControl which overlays are visible on this set:",
 		"FIX_FLOOR": "Fix floor level",
 		"LONG_PRESS_TO_DELETE_SET": "Hold to delete",
 		"RECENTER": "Recenter playspace",
 		"SWITCH_TO_SET": "Switch to set",
 		"TOGGLE_FOR_CURRENT_SET": "Toggle for current set"
+	},
+	"WHISPER": {
+		"TRANSCRIBE": "Press and hold to transcribe text",
+		"PASTE": "Copy transcription to clipboard",
+		"PASTE_AND_GO": "Copy transcription and send Ctrl-V to focused app",
+		"SEND_OSC": "Send transcription to OSC chatbox",
+		"UNLOAD_AND_CLOSE": "Unload model and close",
+		"MODEL_NOT_DOWNLOADED": "Speech-to-text not set up!",
+		"DOWNLOAD_GUIDANCE": "Set up speech-to-text under settings, features!",
+		"INITIAL_TEXT": "Press and hold the mic button to start transcribing...",
+		"INIT_ERROR": "Error while starting Whisper engine",
+		"ENTER_KEY": "Enter key"
+	},
+	"NOTIFICATION": {
+		"COUD_NOT_CONNECT_TO_VR_RUNTIME": "Could not connect to VR runtime.",
+		"NOT_RUNNING_XR_VR": "Make sure that Monado, WiVRn or SteamVR is running.",
+		"NOT_RUNNING_VR": "Make sure that Monado, WiVRn or SteamVR is running.",
+		"NOT_RUNNING_XR": "Make sure that Monado or WiVRn is running.",
+		"INVALID_ARGS": "Check your launch arguments.",
+		"SELECT_SCREEN_CAST_FOR": "Select screen cast for display {DISPLAY}",
+		"CANNOT_CAPTURE_KBD_MOUSE": "Could not initialize keyboard/mouse capture!\nCheck that your user is in the 'input' group.",
+		"WE_ARE_GRABBING": "WayVR has your keyboard and mouse!\nPress Super+Z to release."
 	}
 }

@@ -3,7 +3,7 @@ use wayvr_ipc::{
 	packet_server::{WvrProcess, WvrProcessHandle, WvrWindow, WvrWindowHandle},
 };
 
-use crate::{config::GeneralConfig, desktop_finder::DesktopFinder};
+use crate::{DesktopBackend, XrBackend, config::GeneralConfig, desktop_finder::DesktopFinder};
 
 #[derive(Clone)]
 pub struct MonadoClient {
@@ -37,16 +37,40 @@ pub struct MonadoDumpSessionFrame {
 }
 
 #[derive(Clone, Copy)]
-pub enum RecenterMode {
+pub enum DashPlayspaceTask {
 	FixFloor,
 	Recenter,
 	Reset,
+	SaveCenter,
+	ResetCenter,
 }
 
 #[derive(Clone, Copy)]
 pub struct InterfaceFeats {
-	pub openxr: bool,
+	pub xr_backend: XrBackend,
+	pub desktop_backend: DesktopBackend,
 	pub monado: bool,
+	pub passthru: bool,
+	pub whisper: bool,
+}
+
+impl InterfaceFeats {
+	pub fn default_for_backend(xr_backend: XrBackend) -> Self {
+		Self {
+			xr_backend,
+			desktop_backend: DesktopBackend::Headless,
+			monado: false,
+			passthru: false,
+			whisper: false,
+		}
+	}
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct HmdStats {
+	pub rotations_rad: f32, // total raw in radians
+	pub session_time_ms: u64,
+	pub ipd: f32,
 }
 
 pub trait DashInterface<T> {
@@ -63,24 +87,30 @@ pub trait DashInterface<T> {
 	fn process_list(&mut self, data: &mut T) -> anyhow::Result<Vec<WvrProcess>>;
 	fn process_terminate(&mut self, data: &mut T, handle: WvrProcessHandle) -> anyhow::Result<()>;
 	fn monado_client_list(&mut self, data: &mut T, filtered: bool) -> anyhow::Result<Vec<MonadoClient>>;
-	fn monado_client_focus(&mut self, data: &mut T, name: &str) -> anyhow::Result<()>;
+	fn monado_client_focus(&mut self, data: &mut T, client_id: i64) -> anyhow::Result<()>;
 	fn monado_brightness_get(&mut self, data: &mut T) -> Option<f32>;
 	fn monado_brightness_set(&mut self, data: &mut T, brightness: f32) -> Option<()>;
 	fn monado_metrics_set_enabled(&mut self, data: &mut T, enabled: bool) -> bool;
 	fn monado_metrics_dump_session_frames(&mut self, data: &mut T) -> Vec<MonadoDumpSessionFrame>;
-	fn recenter_playspace(&mut self, data: &mut T, mode: RecenterMode) -> anyhow::Result<()>;
+	fn playspace_task(&mut self, data: &mut T, mode: DashPlayspaceTask) -> anyhow::Result<()>;
 	fn desktop_finder<'a>(&'a mut self, data: &'a mut T) -> &'a mut DesktopFinder;
 	fn general_config<'a>(&'a mut self, data: &'a mut T) -> &'a mut GeneralConfig;
 	fn config_changed(&mut self, data: &mut T, kind: ConfigChangeKind);
 	fn restart(&mut self, data: &mut T);
 	fn toggle_dashboard(&mut self, data: &mut T);
 	fn get_feats(&mut self, data: &mut T) -> InterfaceFeats;
+	fn hmd_stats(&mut self, data: &mut T) -> HmdStats;
 }
 
-#[derive(Clone, Copy)]
+#[derive(Default, Clone, Copy)]
 pub enum ConfigChangeKind {
 	OverlayConfig,
 	EnvironmentBlend,
+	WguiColorPaletteChange,
+	WvrServerConfig,
+	/// Marks the config for saving but doesn't notify any components
+	#[default]
+	Other,
 }
 
 pub type BoxDashInterface<T> = Box<dyn DashInterface<T>>;

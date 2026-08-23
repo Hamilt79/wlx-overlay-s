@@ -1,4 +1,4 @@
-use std::{collections::HashMap, rc::Rc, time::Duration};
+use std::{rc::Rc, time::Duration};
 
 use crate::{
     app_misc,
@@ -6,24 +6,29 @@ use crate::{
         panel::{GuiPanel, NewGuiPanelParams, apply_custom_command},
         timer::GuiTimer,
     },
-    overlays::keyboard::alt_modifier_to_key,
+    overlays::keyboard::{ChildWidget, alt_modifier_to_key},
     state::AppState,
     subsystem::hid::XkbKeymap,
     windowing::backend::OverlayEventData,
 };
 use anyhow::Context;
 use glam::{FloatExt, Mat4, Vec2, vec2, vec3};
+use smallvec::{SmallVec, smallvec};
 use wgui::{
     animation::{Animation, AnimationEasing},
     assets::AssetPath,
-    drawing::{self, Color},
+    color::{WguiColor, WguiColorName},
     event::{self, CallbackMetadata, EventListenerKind},
-    layout::LayoutUpdateParams,
+    layout::{LayoutUpdateParams, WidgetID},
     log::LogErr,
-    parser::{Fetchable, ParseDocumentParams},
+    palette::WguiColorPalette,
+    parser::{Fetchable, ParseDocumentParams, TemplateParams},
     renderer_vk::util,
     taffy::{self, prelude::length},
-    widget::{EventResult, div::WidgetDiv, rectangle::WidgetRectangle},
+    widget::{
+        EventResult, div::WidgetDiv, label::WidgetLabel, rectangle::WidgetRectangle,
+        sprite::WidgetSprite,
+    },
 };
 
 use super::{
@@ -41,6 +46,10 @@ fn new_doc_params(panel: &mut GuiPanel<KeyboardState>) -> ParseDocumentParams<'s
     }
 }
 
+fn bool_to_rc_str(val: bool) -> Rc<str> {
+    if val { "1" } else { "0" }.into()
+}
+
 #[allow(clippy::too_many_lines, clippy::significant_drop_tightening)]
 pub(super) fn create_keyboard_panel(
     app: &mut AppState,
@@ -48,15 +57,24 @@ pub(super) fn create_keyboard_panel(
     state: KeyboardState,
     layout: &layout::Layout,
 ) -> anyhow::Result<GuiPanel<KeyboardState>> {
-    let mut panel =
-        GuiPanel::new_from_template(app, "gui/keyboard.xml", state, NewGuiPanelParams::default())?;
+    let mut params = NewGuiPanelParams::default();
+    params.extra_vars.insert(
+        "openvr".into(),
+        bool_to_rc_str(app.feats.xr_backend.is_open_vr()),
+    );
+    params
+        .extra_vars
+        .insert("not_passthru".into(), bool_to_rc_str(!app.feats.passthru));
+    params.extra_vars.insert(
+        "not_wayland".into(),
+        bool_to_rc_str(!app.feats.desktop_backend.is_wayland()),
+    );
+
+    let mut panel = GuiPanel::new_from_template(app, "gui/keyboard.xml", state, params)?;
 
     let doc_params = new_doc_params(&mut panel);
 
-    let (accent_color, anim_mult) = {
-        let theme = &app.wgui_theme;
-        (theme.accent_color, theme.animation_mult)
-    };
+    let anim_mult = app.wgui_theme.animation_mult;
 
     let root = panel
         .parser_state
@@ -86,7 +104,13 @@ pub(super) fn create_keyboard_panel(
                 height: length(PIXELS_PER_UNIT),
             };
 
-            let Some(key) = layout.get_key_data(keymap, has_altgr, col, row) else {
+            let Some(key) = layout.get_key_data(
+                keymap,
+                has_altgr,
+                col,
+                row,
+                &app.session.config.keyboard_layouts,
+            ) else {
                 let _ = panel.layout.add_child(
                     div.id,
                     WidgetDiv::create(),
@@ -108,34 +132,34 @@ pub(super) fn create_keyboard_panel(
             };
 
             // todo: make this easier to maintain somehow
-            let mut params: HashMap<Rc<str>, Rc<str>> = HashMap::new();
-            params.insert(Rc::from("id"), my_id.clone());
-            params.insert(Rc::from("width"), Rc::from(key_width.to_string()));
-            params.insert(Rc::from("height"), Rc::from(key_height.to_string()));
+            let mut params = TemplateParams::new();
+            params.insert_rc("id", my_id.clone());
+            params.insert_rc("width", key_width.to_string().into());
+            params.insert_rc("height", key_height.to_string().into());
 
             let mut label = key.label.into_iter();
             label
                 .next()
-                .and_then(|s| params.insert("text".into(), s.into()));
+                .and_then(|s| params.insert_rc("text", s.into()));
 
             match key.cap_type {
                 KeyCapType::LetterAltGr => {
                     label
                         .next()
-                        .and_then(|s| params.insert("text_altgr".into(), s.into()));
+                        .and_then(|s| params.insert_rc("text_altgr", s.into()));
                 }
                 KeyCapType::Symbol => {
                     label
                         .next()
-                        .and_then(|s| params.insert("text_shift".into(), s.into()));
+                        .and_then(|s| params.insert_rc("text_shift", s.into()));
                 }
                 KeyCapType::SymbolAltGr => {
                     label
                         .next()
-                        .and_then(|s| params.insert("text_shift".into(), s.into()));
+                        .and_then(|s| params.insert_rc("text_shift", s.into()));
                     label
                         .next()
-                        .and_then(|s| params.insert("text_altgr".into(), s.into()));
+                        .and_then(|s| params.insert_rc("text_altgr", s.into()));
                 }
                 _ => {}
             }
@@ -150,6 +174,8 @@ pub(super) fn create_keyboard_panel(
             )?;
 
             if let Ok(widget_id) = panel.parser_state.get_widget_id(&my_id) {
+                let (labels, sprites) = find_children(&panel, widget_id);
+
                 let key_state = {
                     let rect = panel
                         .layout
@@ -166,6 +192,8 @@ pub(super) fn create_keyboard_panel(
                         cur_border_color: rect.params.border_color.into(),
                         border: rect.params.border,
                         drawn_state: false.into(),
+                        labels,
+                        sprites,
                     })
                 };
 
@@ -178,14 +206,7 @@ pub(super) fn create_keyboard_panel(
                         let k = key_state.clone();
                         move |common, data, _app, _state| {
                             common.alterables.trigger_haptics();
-                            on_enter_anim(
-                                k.clone(),
-                                common,
-                                data,
-                                accent_color,
-                                anim_mult,
-                                width_mul,
-                            );
+                            on_enter_anim(k.clone(), common, data, anim_mult, width_mul);
                             Ok(EventResult::Pass)
                         }
                     }),
@@ -197,14 +218,7 @@ pub(super) fn create_keyboard_panel(
                         let k = key_state.clone();
                         move |common, data, _app, _state| {
                             common.alterables.trigger_haptics();
-                            on_leave_anim(
-                                k.clone(),
-                                common,
-                                data,
-                                accent_color,
-                                anim_mult,
-                                width_mul,
-                            );
+                            on_leave_anim(k.clone(), common, data, anim_mult, width_mul);
                             Ok(EventResult::Pass)
                         }
                     }),
@@ -337,6 +351,35 @@ pub(super) fn create_keyboard_panel(
     Ok(panel)
 }
 
+fn find_children<S>(
+    panel: &GuiPanel<S>,
+    widget_id: WidgetID,
+) -> (SmallVec<[ChildWidget; 3]>, SmallVec<[ChildWidget; 1]>) {
+    let mut labels = smallvec![];
+    let mut sprites = smallvec![];
+
+    let mut children = vec![];
+    panel
+        .layout
+        .collect_children_ids_recursive(widget_id, &mut children);
+
+    for child in children {
+        if let Some(widget) = panel.layout.state.widgets.get_as::<WidgetSprite>(child) {
+            sprites.push(ChildWidget {
+                id: child,
+                base_color: widget.get_color(),
+            });
+        } else if let Some(widget) = panel.layout.state.widgets.get_as::<WidgetLabel>(child) {
+            labels.push(ChildWidget {
+                id: child,
+                base_color: widget.get_color(),
+            });
+        }
+    }
+
+    (labels, sprites)
+}
+
 const BUTTON_HOVER_SCALE: f32 = 0.1;
 
 fn get_anim_transform(pos: f32, widget_size: Vec2, width_mult: f32) -> Mat4 {
@@ -349,29 +392,22 @@ fn get_anim_transform(pos: f32, widget_size: Vec2, width_mult: f32) -> Mat4 {
     util::centered_matrix(widget_size, &Mat4::from_scale(scale))
 }
 
+const HOVER_COLOR: WguiColor = WguiColorName::Tertiary.to_wgui_color();
+const HOVER_BORDER_COLOR: WguiColor = WguiColorName::Tertiary.to_wgui_color().mult_rgb(0.5);
+const HOVER_TEXT_COLOR: WguiColor = WguiColorName::OnTertiary.to_wgui_color();
+const PRESS_BORDER_COLOR: WguiColor = WguiColorName::Highlight.to_wgui_color();
+
 fn set_anim_color(
+    palette: &WguiColorPalette,
     key_state: &KeyState,
     rect: &mut WidgetRectangle,
     pos: f32,
-    accent_color: drawing::Color,
 ) {
-    // fade to accent color
-    rect.params.color.r = key_state.color.r.lerp(accent_color.r, pos);
-    rect.params.color.g = key_state.color.g.lerp(accent_color.g, pos);
-    rect.params.color.b = key_state.color.b.lerp(accent_color.b, pos);
+    rect.params.color = key_state.color.lerp(palette, &HOVER_COLOR, pos);
+    rect.params.color2 = key_state.color2.lerp(palette, &HOVER_COLOR, pos);
 
-    // fade to accent color
-    rect.params.color2.r = key_state.color2.r.lerp(accent_color.r, pos);
-    rect.params.color2.g = key_state.color2.g.lerp(accent_color.g, pos);
-    rect.params.color2.b = key_state.color2.b.lerp(accent_color.b, pos);
-
-    // fade to white
     let cur_border_color = key_state.cur_border_color.get();
-    rect.params.border_color.r = cur_border_color.r.lerp(1.0, pos);
-    rect.params.border_color.g = cur_border_color.g.lerp(1.0, pos);
-    rect.params.border_color.b = cur_border_color.b.lerp(1.0, pos);
-    rect.params.border_color.a = cur_border_color.a.lerp(1.0, pos);
-
+    rect.params.border_color = cur_border_color.lerp(palette, &HOVER_BORDER_COLOR, pos);
     rect.params.border = key_state.border.lerp(key_state.border * 1.5, pos);
 }
 
@@ -379,7 +415,6 @@ fn on_enter_anim(
     key_state: Rc<KeyState>,
     common: &mut event::CallbackDataCommon,
     data: &event::CallbackData,
-    accent_color: drawing::Color,
     anim_mult: f32,
     width_mult: f32,
 ) {
@@ -389,7 +424,34 @@ fn on_enter_anim(
         AnimationEasing::OutBack,
         Box::new(move |common, data| {
             let rect = data.obj.get_as_mut::<WidgetRectangle>().unwrap();
-            set_anim_color(&key_state, rect, data.pos, accent_color);
+            set_anim_color(&common.globals().palette, &key_state, rect, data.pos);
+
+            for child in &key_state.labels {
+                let mut widget = common
+                    .state
+                    .widgets
+                    .get_as::<WidgetLabel>(child.id)
+                    .unwrap();
+                let color =
+                    child
+                        .base_color
+                        .lerp(&common.globals().palette, &HOVER_TEXT_COLOR, data.pos);
+                widget.set_color(common, color, true);
+            }
+
+            for child in &key_state.sprites {
+                let mut widget = common
+                    .state
+                    .widgets
+                    .get_as::<WidgetSprite>(child.id)
+                    .unwrap();
+                let color =
+                    child
+                        .base_color
+                        .lerp(&common.globals().palette, &HOVER_TEXT_COLOR, data.pos);
+                widget.set_color(common, color);
+            }
+
             data.data.transform =
                 get_anim_transform(data.pos, data.widget_boundary.size, width_mult);
             common.alterables.mark_redraw();
@@ -401,7 +463,6 @@ fn on_leave_anim(
     key_state: Rc<KeyState>,
     common: &mut event::CallbackDataCommon,
     data: &event::CallbackData,
-    accent_color: drawing::Color,
     anim_mult: f32,
     width_mult: f32,
 ) {
@@ -411,7 +472,36 @@ fn on_leave_anim(
         AnimationEasing::OutQuad,
         Box::new(move |common, data| {
             let rect = data.obj.get_as_mut::<WidgetRectangle>().unwrap();
-            set_anim_color(&key_state, rect, 1.0 - data.pos, accent_color);
+            set_anim_color(&common.globals().palette, &key_state, rect, 1.0 - data.pos);
+
+            for child in &key_state.labels {
+                let color = child.base_color.lerp(
+                    &common.globals().palette,
+                    &HOVER_TEXT_COLOR,
+                    1.0 - data.pos,
+                );
+                let mut widget = common
+                    .state
+                    .widgets
+                    .get_as::<WidgetLabel>(child.id)
+                    .unwrap();
+                widget.set_color(common, color, true);
+            }
+
+            for child in &key_state.sprites {
+                let color = child.base_color.lerp(
+                    &common.globals().palette,
+                    &HOVER_TEXT_COLOR,
+                    1.0 - data.pos,
+                );
+                let mut widget = common
+                    .state
+                    .widgets
+                    .get_as::<WidgetSprite>(child.id)
+                    .unwrap();
+                widget.set_color(common, color);
+            }
+
             data.data.transform =
                 get_anim_transform(1.0 - data.pos, data.widget_boundary.size, width_mult);
             common.alterables.mark_redraw();
@@ -428,9 +518,7 @@ fn on_press_anim(
         return;
     }
     let rect = data.obj.get_as_mut::<WidgetRectangle>().unwrap();
-    key_state
-        .cur_border_color
-        .set(Color::new(1.0, 1.0, 1.0, 1.0));
+    key_state.cur_border_color.set(PRESS_BORDER_COLOR);
     rect.params.border_color = key_state.cur_border_color.get();
     common.alterables.mark_redraw();
     key_state.drawn_state.set(true);

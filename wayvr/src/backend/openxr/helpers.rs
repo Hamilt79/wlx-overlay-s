@@ -1,3 +1,5 @@
+use std::ffi::CStr;
+
 use anyhow::{bail, ensure};
 use glam::{Affine3A, Quat, Vec3, Vec3A};
 use openxr::{self as xr, SessionCreateFlags, Version, sys::Handle};
@@ -41,6 +43,17 @@ pub(super) fn init_xr() -> Result<(xr::Instance, xr::SystemId), anyhow::Error> {
     } else {
         log::warn!("Missing EXT_dpad_binding extension.");
     }
+    if available_extensions.fb_composition_layer_alpha_blend {
+        enabled_extensions.fb_composition_layer_alpha_blend = true;
+    } else {
+        log::warn!("Missing XR_FB_composition_layer_alpha_blend extension.");
+    }
+
+    if available_extensions.ext_samsung_odyssey_controller {
+        enabled_extensions.ext_samsung_odyssey_controller = true;
+    } else {
+        log::warn!("Missing XR_EXT_samsung_odyssey_controller extension.");
+    }
     if available_extensions.ext_hp_mixed_reality_controller {
         enabled_extensions.ext_hp_mixed_reality_controller = true;
     } else {
@@ -72,9 +85,19 @@ pub(super) fn init_xr() -> Result<(xr::Instance, xr::SystemId), anyhow::Error> {
         log::warn!("Missing XR_KHR_composition_layer_color_scale_bias extension.");
     }
 
-    let xr_mndx_system_buttons = b"XR_MNDX_system_buttons".to_vec();
-    if available_extensions.other.contains(&xr_mndx_system_buttons) {
-        enabled_extensions.other.push(xr_mndx_system_buttons);
+    let xr_extension = b"XR_MNDX_system_buttons\0".to_vec();
+    if available_extensions.other.contains(&xr_extension) {
+        enabled_extensions.other.push(xr_extension);
+    }
+
+    let xr_extension = b"XR_VALVE_frame_controller_interaction\0".to_vec();
+    if available_extensions.other.contains(&xr_extension) {
+        enabled_extensions.other.push(xr_extension);
+    }
+
+    let xr_extension: Vec<u8> = b"XR_MND_contactglove2_interaction\0".to_vec();
+    if available_extensions.other.contains(&xr_extension) {
+        enabled_extensions.other.push(xr_extension);
     }
 
     //#[cfg(not(debug_assertions))]
@@ -107,6 +130,22 @@ pub(super) fn init_xr() -> Result<(xr::Instance, xr::SystemId), anyhow::Error> {
         instance_props.runtime_name,
         instance_props.runtime_version
     );
+
+    let enabled_extensions = enabled_extensions
+        .names()
+        .into_iter()
+        .filter_map(|name| {
+            Some(
+                CStr::from_bytes_with_nul(name)
+                    .ok()?
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    log::info!("OpenXR extensions:\n{enabled_extensions}");
 
     let Ok(system) = xr_instance.system(xr::FormFactor::HEAD_MOUNTED_DISPLAY) else {
         bail!("Failed to access OpenXR HMD system.");

@@ -1,7 +1,7 @@
 use glam::Affine3A;
 use serde::{Deserialize, Serialize};
 
-use crate::common::LeftRight;
+use crate::{common::LeftRight, config::DefaultPositioning};
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub enum Positioning {
@@ -22,15 +22,20 @@ pub enum Positioning {
 		hand: LeftRight,
 		#[serde(default)]
 		lerp: f32,
-		#[serde(default)]
-		align_to_hmd: bool,
 	},
 }
 
-impl Positioning {
-	pub const fn moves_with_space(self) -> bool {
-		matches!(self, Self::Floating | Self::Anchored | Self::Static)
+impl From<DefaultPositioning> for Positioning {
+	fn from(value: DefaultPositioning) -> Self {
+		match value {
+			DefaultPositioning::Anchored => Self::Anchored,
+			DefaultPositioning::Floating => Self::Floating,
+			DefaultPositioning::Static => Self::Static,
+		}
 	}
+}
+
+impl Positioning {
 	pub const fn get_lerp(self) -> Option<f32> {
 		match self {
 			Self::FollowHead { lerp } => Some(lerp),
@@ -43,21 +48,6 @@ impl Positioning {
 			Self::FollowHead { ref mut lerp } => *lerp = value,
 			Self::FollowHand { ref mut lerp, .. } => *lerp = value,
 			Self::Floating | Self::Anchored | Self::Static => {}
-		}
-		self
-	}
-	pub const fn get_align(self) -> Option<bool> {
-		match self {
-			Self::FollowHand { align_to_hmd, .. } => Some(align_to_hmd),
-			Self::FollowHead { .. } | Self::Floating | Self::Anchored | Self::Static => None,
-		}
-	}
-	pub const fn with_align(mut self, value: bool) -> Self {
-		match self {
-			Self::FollowHand {
-				ref mut align_to_hmd, ..
-			} => *align_to_hmd = value,
-			Self::FollowHead { .. } | Self::Floating | Self::Anchored | Self::Static => {}
 		}
 		self
 	}
@@ -78,6 +68,8 @@ pub struct OverlayWindowState {
 	pub saved_transform: Option<Affine3A>,
 	pub block_input: bool,
 	pub angle_fade: bool,
+	#[serde(default)]
+	pub align_to_hmd: bool,
 }
 
 impl Default for OverlayWindowState {
@@ -93,6 +85,7 @@ impl Default for OverlayWindowState {
 			saved_transform: None,
 			block_input: true,
 			angle_fade: false,
+			align_to_hmd: false,
 		}
 	}
 }

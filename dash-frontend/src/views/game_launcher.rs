@@ -52,19 +52,15 @@ pub struct View {
 
 impl ViewTrait for View {
 	fn update(&mut self, par: &mut ViewUpdateParams) -> anyhow::Result<()> {
-		loop {
-			let tasks = self.tasks.drain();
-			if tasks.is_empty() {
-				break;
-			}
-			for task in tasks {
+		while !self.tasks.is_empty() {
+			for task in self.tasks.drain() {
 				match task {
-					Task::FillAppDetails(details) => self.action_fill_app_details(&mut par.layout, details)?,
+					Task::FillAppDetails(details) => self.action_fill_app_details(par.layout, details)?,
 					Task::Launch => self.action_launch(),
 					Task::SetCoverArt(cover_art) => {
 						let _ = self
 							.view_cover
-							.set_cover_art(&mut self.game_cover_view_common, &mut par.layout, &cover_art);
+							.set_cover_art(&mut self.game_cover_view_common, par.layout, &cover_art);
 					}
 				}
 			}
@@ -75,8 +71,8 @@ impl ViewTrait for View {
 }
 
 impl View {
-	async fn fetch_details(executor: AsyncExecutor, tasks: Tasks<Task>, app_id: AppID) {
-		let Some(details) = cached_fetcher::get_app_details_json(executor, app_id).await else {
+	async fn fetch_details(tasks: Tasks<Task>, app_id: AppID) {
+		let Some(details) = cached_fetcher::get_app_details_json(app_id).await else {
 			return;
 		};
 
@@ -103,7 +99,7 @@ impl View {
 		let tasks = Tasks::new();
 
 		// fetch details from the web
-		let fut = View::fetch_details(params.executor.clone(), tasks.clone(), params.manifest.app_id.clone());
+		let fut = View::fetch_details(tasks.clone(), params.manifest.app_id.clone());
 		params.executor.spawn(fut).detach();
 
 		let id_cover_art_parent = state.get_widget_id("cover_art_parent")?;
@@ -145,8 +141,8 @@ impl View {
 	) -> anyhow::Result<()> {
 		{
 			let mut c = layout.common();
-			let label_author = self.state.fetch_widget(&c.state, "label_author")?.widget;
-			let label_description = self.state.fetch_widget(&c.state, "label_description")?.widget;
+			let label_author = self.state.fetch_widget(c.state, "label_author")?.widget;
+			let label_description = self.state.fetch_widget(c.state, "label_description")?.widget;
 
 			if let Some(developer) = details.developers.pop() {
 				label_author
@@ -224,5 +220,6 @@ pub fn mount_popup(
 				popup.set_view(data.handle, view, None);
 				Ok(popup.get_close_callback(data.layout))
 			}),
+			Default::default(), /* extra */
 		)));
 }

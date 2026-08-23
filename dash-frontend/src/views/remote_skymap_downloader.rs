@@ -1,4 +1,4 @@
-use std::{collections::HashMap, rc::Rc};
+use std::rc::Rc;
 
 use crate::{
 	frontend::{FrontendTask, FrontendTasks},
@@ -11,12 +11,12 @@ use crate::{
 use anyhow::Context;
 use wgui::{
 	assets::AssetPath,
+	color::WguiColorName,
 	components::button::ComponentButton,
-	drawing::Color,
 	globals::WguiGlobals,
 	i18n::Translation,
 	layout::{Layout, WidgetID},
-	parser::{Fetchable, ParseDocumentParams, ParserState},
+	parser::{Fetchable, ParseDocumentParams, ParserState, TemplateParams},
 	renderer_vk::text::custom_glyph::CustomGlyphData,
 	task::Tasks,
 	widget::{image::WidgetImage, label::WidgetLabel},
@@ -73,20 +73,20 @@ fn mount_resolution_button(
 	tasks: &Tasks<Task>,
 	already_downloaded: bool,
 ) -> anyhow::Result<()> {
-	let mut t = HashMap::<Rc<str>, Rc<str>>::new();
-	t.insert(Rc::from("text"), Rc::from(res.get_display_str()));
+	let mut t = TemplateParams::new();
+	t.insert("text", res.get_display_str());
 	t.insert(
-		Rc::from("sprite"),
-		Rc::from(match already_downloaded {
+		"sprite",
+		match already_downloaded {
 			true => "dashboard/check.svg",
 			false => "dashboard/download.svg",
-		}),
+		},
 	);
 	let data = parser_state.realize_template(doc_params, "ResolutionButton", layout, parent_id, t)?;
 	let button = data.fetch_component_as::<ComponentButton>("button")?;
 
 	if already_downloaded {
-		button.set_color(&mut layout.common(), Color::new(0.0, 0.4, 0.0, 1.0)); // green
+		button.set_color(&mut layout.common(), WguiColorName::Tertiary.into()); // green
 	}
 	tasks.handle_button(&button, Task::ResolutionClicked(res));
 	Ok(())
@@ -144,7 +144,7 @@ impl View {
 	pub fn new(par: Params) -> anyhow::Result<Self> {
 		let tasks = Tasks::<Task>::new();
 
-		let parser_state = wgui::parser::parse_from_assets(&doc_params(&par.globals), par.layout, par.parent_id)?;
+		let parser_state = wgui::parser::parse_from_assets(&doc_params(par.globals), par.layout, par.parent_id)?;
 		let id_resolution_buttons = parser_state.get_widget_id("resolution_buttons")?;
 
 		let str_version = par.globals.i18n().translate("VERSION");
@@ -249,9 +249,9 @@ impl View {
 	}
 
 	fn show_dialog_box_action(&mut self, resolution: SkymapResolution) -> anyhow::Result<()> {
-		const ACTION_REMOVE: &'static str = "remove";
-		const ACTION_DOWNLOAD_AGAIN: &'static str = "download_again";
-		const ACTION_APPLY: &'static str = "apply";
+		const ACTION_REMOVE: &str = "remove";
+		const ACTION_DOWNLOAD_AGAIN: &str = "download_again";
+		const ACTION_APPLY: &str = "apply";
 
 		let tasks = self.tasks.clone();
 
@@ -362,6 +362,7 @@ impl View {
 	}
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn mount_popup(
 	frontend_tasks: FrontendTasks,
 	executor: AsyncExecutor,
@@ -392,5 +393,6 @@ pub fn mount_popup(
 				popup.set_view(data.handle, view, None);
 				Ok(popup.get_close_callback(data.layout))
 			}),
+			Default::default(), /* extra */
 		)));
 }

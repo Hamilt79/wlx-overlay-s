@@ -9,12 +9,13 @@ use taffy::{
 
 use crate::{
 	animation::{Animation, AnimationEasing},
+	color::{WguiColor, WguiColorName},
 	components::{
-		Component, ComponentBase, ComponentTrait, RefreshData,
+		Component, ComponentBase, ComponentTrait, DestroyData, RefreshData,
 		radio_group::ComponentRadioGroup,
 		tooltip::{self, ComponentTooltip, TooltipTrait},
 	},
-	drawing::Color,
+	drawing,
 	event::{CallbackDataCommon, EventListenerCollection, EventListenerID, EventListenerKind},
 	i18n::Translation,
 	layout::{self, WidgetID, WidgetPair},
@@ -31,7 +32,7 @@ use crate::{
 pub struct Params {
 	pub text: Translation,
 	pub style: taffy::Style,
-	pub color_checked: Option<Color>,
+	pub color_checked: Option<WguiColor>,
 	pub box_size: f32,
 	pub checked: bool,
 	pub radio_group: Option<Rc<ComponentRadioGroup>>,
@@ -80,14 +81,13 @@ impl TooltipTrait for State {
 struct Data {
 	#[allow(dead_code)]
 	id_container: WidgetID, // Rectangle, transparent if not hovered
-
-	//id_outer_box: WidgetID, // Rectangle, parent of container
+	id_outer_box: WidgetID, // Rectangle, has the border
 	id_inner_box: WidgetID, // Rectangle, parent of outer_box
 	id_label: WidgetID,     // Label, parent of container
 	value: Option<Rc<str>>, // arbitrary value assigned to the element
 	radio_group: Option<Weak<ComponentRadioGroup>>,
 
-	color_checked: Color,
+	color_checked: WguiColor,
 }
 
 pub struct ComponentCheckbox {
@@ -96,7 +96,8 @@ pub struct ComponentCheckbox {
 	state: Rc<RefCell<State>>,
 }
 
-const COLOR_UNCHECKED: Color = Color::new(0.0, 0.0, 0.0, 0.0);
+const COLOR_UNCHECKED: WguiColor = WguiColor::Raw(drawing::Color::new(0., 0., 0., 0.));
+const COLOR_HOVERED: WguiColor = WguiColorName::Tertiary.to_wgui_color();
 
 impl ComponentTrait for ComponentCheckbox {
 	fn base(&self) -> &ComponentBase {
@@ -110,11 +111,22 @@ impl ComponentTrait for ComponentCheckbox {
 	fn refresh(&self, _data: &mut RefreshData) {
 		// nothing to do
 	}
+
+	fn destroy(&self, data: &mut DestroyData) {
+		if let Some(comp) = self.state.borrow_mut().active_tooltip.take() {
+			comp.destroy(data);
+			data.destroy_widgets.push(comp.base().id);
+		}
+	}
 }
 
-fn set_box_checked(widgets: &layout::WidgetMap, data: &Data, checked: bool) {
+fn set_box_checked(widgets: &layout::WidgetMap, data: &Data, checked: bool, hovered: bool) {
 	widgets.call(data.id_inner_box, |rect: &mut WidgetRectangle| {
-		rect.params.color = if checked { data.color_checked } else { COLOR_UNCHECKED }
+		rect.params.color = if checked {
+			if hovered { COLOR_HOVERED } else { data.color_checked }
+		} else {
+			COLOR_UNCHECKED
+		}
 	});
 }
 
@@ -128,14 +140,16 @@ impl ComponentCheckbox {
 	}
 
 	pub fn set_checked(&self, common: &mut CallbackDataCommon, checked: bool) {
+		let hovered;
 		{
 			let mut state = self.state.borrow_mut();
 			if state.checked == checked {
 				return;
 			}
 			state.checked = checked;
+			hovered = state.hovered;
 		}
-		set_box_checked(&common.state.widgets, &self.data, checked);
+		set_box_checked(&common.state.widgets, &self.data, checked, hovered);
 		common.alterables.mark_redraw();
 	}
 
@@ -158,37 +172,37 @@ impl ComponentCheckbox {
 	}
 }
 
-fn anim_hover(rect: &mut WidgetRectangle, pos: f32, pressed: bool) {
-	let brightness = pos * if pressed { 0.6 } else { 0.4 };
+fn anim_hover(anim_data: &mut crate::animation::CallbackData<'_>, pos: f32, _pressed: bool) {
+	let rect = anim_data.obj.as_any_mut().downcast_mut::<WidgetRectangle>().unwrap();
 	rect.params.border = 2.0;
-	rect.params.color.a = brightness;
-	rect.params.border_color.a = rect.params.color.a;
-	if pressed {
-		rect.params.border_color.a += 0.4;
-	}
+	rect.params.border_color = if pos > 0.0 {
+		COLOR_HOVERED
+	} else {
+		WguiColorName::OnBackground.into()
+	};
 }
 
-fn anim_hover_in(state: Rc<RefCell<State>>, widget_id: WidgetID, anim_mult: f32) -> Animation {
+fn anim_hover_in(state: &Rc<RefCell<State>>, data: &Rc<Data>, anim_mult: f32) -> Animation {
+	let down = state.borrow().down;
 	Animation::new(
-		widget_id,
+		data.id_outer_box,
 		(5. * anim_mult) as _,
 		AnimationEasing::OutQuad,
 		Box::new(move |common, anim_data| {
-			let rect = anim_data.obj.get_as_mut::<WidgetRectangle>().unwrap();
-			anim_hover(rect, anim_data.pos, state.borrow().down);
+			anim_hover(anim_data, anim_data.pos, down);
 			common.alterables.mark_redraw();
 		}),
 	)
 }
 
-fn anim_hover_out(state: Rc<RefCell<State>>, widget_id: WidgetID, anim_mult: f32) -> Animation {
+fn anim_hover_out(state: &Rc<RefCell<State>>, data: &Rc<Data>, anim_mult: f32) -> Animation {
+	let down = state.borrow().down;
 	Animation::new(
-		widget_id,
+		data.id_outer_box,
 		(8. * anim_mult) as _,
 		AnimationEasing::OutQuad,
 		Box::new(move |common, anim_data| {
-			let rect = anim_data.obj.get_as_mut::<WidgetRectangle>().unwrap();
-			anim_hover(rect, 1.0 - anim_data.pos, state.borrow().down);
+			anim_hover(anim_data, 1.0 - anim_data.pos, down);
 			common.alterables.mark_redraw();
 		}),
 	)
@@ -196,43 +210,32 @@ fn anim_hover_out(state: Rc<RefCell<State>>, widget_id: WidgetID, anim_mult: f32
 
 fn register_event_mouse_enter(
 	state: Rc<RefCell<State>>,
+	data: Rc<Data>,
 	listeners: &mut EventListenerCollection,
 	tooltip_info: Option<tooltip::TooltipInfo>,
 	anim_mult: f32,
 ) -> EventListenerID {
 	listeners.register(
 		EventListenerKind::MouseEnter,
-		Box::new(move |common, event_data, (), ()| {
+		Box::new(move |common, _event_data, (), ()| {
 			common.alterables.trigger_haptics();
-			common
-				.alterables
-				.animate(anim_hover_in(state.clone(), event_data.widget_id, anim_mult));
+			common.alterables.animate(anim_hover_in(&state, &data, anim_mult));
 
-			ComponentTooltip::register_hover_in(common, &tooltip_info, event_data.widget_id, state.clone());
+			ComponentTooltip::register_hover_in(common, &tooltip_info, data.id_container, state.clone());
 
-			state.borrow_mut().hovered = true;
-			Ok(EventResult::Pass)
-		}),
-	)
-}
-
-fn register_event_mouse_leave(
-	state: Rc<RefCell<State>>,
-	listeners: &mut EventListenerCollection,
-	anim_mult: f32,
-) -> EventListenerID {
-	listeners.register(
-		EventListenerKind::MouseLeave,
-		Box::new(move |common, event_data, (), ()| {
-			common.alterables.trigger_haptics();
-			common
-				.alterables
-				.animate(anim_hover_out(state.clone(), event_data.widget_id, anim_mult));
-
-			{
+			let checked = {
 				let mut state = state.borrow_mut();
-				state.hovered = false;
-				state.active_tooltip = None;
+				state.hovered = true;
+				state.checked
+			};
+
+			if checked {
+				common
+					.state
+					.widgets
+					.call(data.id_inner_box, |rect: &mut WidgetRectangle| {
+						rect.params.color = COLOR_HOVERED;
+					});
 			}
 
 			Ok(EventResult::Pass)
@@ -240,14 +243,72 @@ fn register_event_mouse_leave(
 	)
 }
 
-fn register_event_mouse_press(state: Rc<RefCell<State>>, listeners: &mut EventListenerCollection) -> EventListenerID {
+fn register_event_mouse_leave(
+	state: Rc<RefCell<State>>,
+	data: Rc<Data>,
+	listeners: &mut EventListenerCollection,
+	anim_mult: f32,
+) -> EventListenerID {
+	listeners.register(
+		EventListenerKind::MouseLeave,
+		Box::new(move |common, _event_data, (), ()| {
+			common.alterables.trigger_haptics();
+			common.alterables.animate(anim_hover_out(&state, &data, anim_mult));
+
+			let checked = {
+				let mut state = state.borrow_mut();
+				state.hovered = false;
+				state.active_tooltip = None;
+				state.checked
+			};
+
+			if checked {
+				common
+					.state
+					.widgets
+					.call(data.id_inner_box, |rect: &mut WidgetRectangle| {
+						rect.params.color = data.color_checked;
+					});
+			}
+
+			Ok(EventResult::Pass)
+		}),
+	)
+}
+
+fn register_event_mouse_cancel(state: Rc<RefCell<State>>, listeners: &mut EventListenerCollection) -> EventListenerID {
+	listeners.register(
+		EventListenerKind::MouseCancel,
+		Box::new(move |_common, _event_data, (), ()| {
+			let mut state = state.borrow_mut();
+			state.down = false;
+			Ok(EventResult::Pass)
+		}),
+	)
+}
+
+fn register_event_mouse_press(
+	state: Rc<RefCell<State>>,
+	data: Rc<Data>,
+	listeners: &mut EventListenerCollection,
+) -> EventListenerID {
 	listeners.register(
 		EventListenerKind::MousePress,
-		Box::new(move |common, event_data, (), ()| {
+		Box::new(move |common, _event_data, (), ()| {
 			let mut state = state.borrow_mut();
+			let pressed_hovered = state.hovered;
 
-			let rect = event_data.obj.get_as_mut::<WidgetRectangle>().unwrap();
-			anim_hover(rect, 1.0, true);
+			common
+				.state
+				.widgets
+				.call(data.id_outer_box, |rect: &mut WidgetRectangle| {
+					rect.params.border = 2.0;
+					rect.params.border_color = if pressed_hovered {
+						COLOR_HOVERED
+					} else {
+						WguiColorName::OnBackground.into()
+					};
+				});
 
 			common.alterables.trigger_haptics();
 			common.alterables.mark_redraw();
@@ -270,15 +331,27 @@ fn register_event_mouse_release(
 ) -> EventListenerID {
 	listeners.register(
 		EventListenerKind::MouseRelease,
-		Box::new(move |common, event_data, (), ()| {
-			let rect = event_data.obj.get_as_mut::<WidgetRectangle>().unwrap();
-			anim_hover(rect, 1.0, false);
+		Box::new(move |common, _event_data, (), ()| {
+			let mut state = state.borrow_mut();
+			let released_hovered = state.hovered;
+			let was_down = state.down;
+
+			common
+				.state
+				.widgets
+				.call(data.id_outer_box, |rect: &mut WidgetRectangle| {
+					rect.params.border = 2.0;
+					rect.params.border_color = if released_hovered {
+						COLOR_HOVERED
+					} else {
+						WguiColorName::OnBackground.into()
+					};
+				});
 
 			common.alterables.trigger_haptics();
 			common.alterables.mark_redraw();
 
-			let mut state = state.borrow_mut();
-			if state.down {
+			if was_down {
 				state.down = false;
 
 				if let Some(self_ref) = state.self_ref.upgrade()
@@ -296,7 +369,7 @@ fn register_event_mouse_release(
 					});
 				}
 
-				set_box_checked(&common.state.widgets, &data, state.checked);
+				set_box_checked(&common.state.widgets, &data, state.checked, state.hovered);
 				if state.hovered
 					&& let Some(on_toggle) = &state.on_toggle
 				{
@@ -318,28 +391,27 @@ fn register_event_mouse_release(
 
 pub fn construct(ess: &mut ConstructEssentials, params: Params) -> anyhow::Result<(WidgetPair, Rc<ComponentCheckbox>)> {
 	let mut style = params.style;
-	let theme = &ess.layout.state.theme;
 
 	// force-override style
 	style.flex_wrap = taffy::FlexWrap::NoWrap;
-	style.align_items = Some(AlignItems::Center);
+	style.align_items = Some(AlignItems::CENTER);
 
 	// make checkbox interaction box larger by setting padding and negative margin
 	style.padding = taffy::Rect {
-		left: length(4.0),
-		right: length(8.0),
-		top: length(4.0),
-		bottom: length(4.0),
+		left: length(4.0_f32),
+		right: length(8.0_f32),
+		top: length(4.0_f32),
+		bottom: length(4.0_f32),
 	};
 
 	style.margin = taffy::Rect {
-		left: length(-4.0),
-		right: length(-8.0),
-		top: length(-4.0),
-		bottom: length(-4.0),
+		left: length(-4.0_f32),
+		right: length(-8.0_f32),
+		top: length(-4.0_f32),
+		bottom: length(-4.0_f32),
 	};
 	//style.align_self = Some(taffy::AlignSelf::Start); // do not stretch self to the parent
-	style.gap = length(4.0);
+	style.gap = length(4.0_f32);
 
 	let (round_5, round_8) = if params.radio_group.is_some() {
 		(WLength::Percent(1.0), WLength::Percent(1.0))
@@ -347,13 +419,12 @@ pub fn construct(ess: &mut ConstructEssentials, params: Params) -> anyhow::Resul
 		(WLength::Units(5.0), WLength::Units(8.0))
 	};
 
-	let color_checked = params.color_checked.unwrap_or(theme.accent_color);
+	let color_checked = params.color_checked.unwrap_or_else(|| WguiColorName::Primary.into());
 
 	let (root, _) = ess.layout.add_child(
 		ess.parent,
 		WidgetRectangle::create(WidgetRectangleParams {
-			color: Color::new(1.0, 1.0, 1.0, 0.0),
-			border_color: Color::new(1.0, 1.0, 1.0, 0.0),
+			color: WguiColor::from(WguiColorName::OnPrimary).with_alpha(0.0),
 			round: round_5,
 			..Default::default()
 		}),
@@ -371,14 +442,14 @@ pub fn construct(ess: &mut ConstructEssentials, params: Params) -> anyhow::Resul
 		id_container,
 		WidgetRectangle::create(WidgetRectangleParams {
 			border: 2.0,
-			border_color: Color::new(1.0, 1.0, 1.0, 1.0),
+			border_color: WguiColorName::OnBackground.into(),
 			round: round_8,
-			color: Color::new(1.0, 1.0, 1.0, 0.0),
+			color: WguiColor::from(WguiColorName::OnPrimary).with_alpha(0.0),
 			..Default::default()
 		}),
 		taffy::Style {
 			size: box_size,
-			padding: taffy::Rect::length(4.0),
+			padding: taffy::Rect::length(4.0_f32),
 			min_size: box_size,
 			max_size: box_size,
 			..Default::default()
@@ -394,8 +465,8 @@ pub fn construct(ess: &mut ConstructEssentials, params: Params) -> anyhow::Resul
 		}),
 		taffy::Style {
 			size: taffy::Size {
-				width: percent(1.0),
-				height: percent(1.0),
+				width: percent(1.0_f32),
+				height: percent(1.0_f32),
 			},
 			..Default::default()
 		},
@@ -407,14 +478,17 @@ pub fn construct(ess: &mut ConstructEssentials, params: Params) -> anyhow::Resul
 			content: params.text,
 			style: TextStyle {
 				weight: Some(FontWeight::Bold),
+				color: Some(WguiColorName::OnBackground.into()),
 				..Default::default()
 			},
+			..Default::default()
 		},
 	);
 	let (label, _node_label) = ess.layout.add_child(id_container, widget_label, Default::default())?;
 
 	let data = Rc::new(Data {
 		id_container,
+		id_outer_box: outer_box.id,
 		id_inner_box: inner_box.id,
 		id_label: label.id,
 		value: params.value,
@@ -437,9 +511,10 @@ pub fn construct(ess: &mut ConstructEssentials, params: Params) -> anyhow::Resul
 			let listeners = &mut root.widget.state().event_listeners;
 			let anim_mult = ess.layout.state.theme.animation_mult;
 			vec![
-				register_event_mouse_enter(state.clone(), listeners, params.tooltip, anim_mult),
-				register_event_mouse_leave(state.clone(), listeners, anim_mult),
-				register_event_mouse_press(state.clone(), listeners),
+				register_event_mouse_enter(state.clone(), data.clone(), listeners, params.tooltip, anim_mult),
+				register_event_mouse_leave(state.clone(), data.clone(), listeners, anim_mult),
+				register_event_mouse_cancel(state.clone(), listeners),
+				register_event_mouse_press(state.clone(), data.clone(), listeners),
 				register_event_mouse_release(data.clone(), state.clone(), listeners),
 			]
 		},

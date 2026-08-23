@@ -1,4 +1,5 @@
 use crate::{
+	color::ParentColor,
 	i18n::Translation,
 	layout::WidgetID,
 	parser::{
@@ -19,7 +20,7 @@ pub fn parse_widget_label<'a>(
 	let mut params = WidgetLabelParams::default();
 
 	let style = parse_style(ctx, attribs, tag_name);
-	params.style = parse_text_style(ctx, attribs, tag_name);
+	params.style = parse_text_style(ctx, attribs, tag_name, "");
 
 	for pair in attribs {
 		let (key, value) = (pair.attrib.as_ref(), pair.value.as_ref());
@@ -36,10 +37,11 @@ pub fn parse_widget_label<'a>(
 					params.content = Translation::from_raw_text(value);
 				}
 			}
-			"translation" => {
-				if !value.is_empty() {
-					params.content = Translation::from_translation_key(value);
-				}
+			"translation" if !value.is_empty() => {
+				params.content = Translation::from_translation_key(value);
+			}
+			"parent_color" => {
+				params.parent_color = ParentColor::try_from(value).unwrap_or_default();
 			}
 			_ => {}
 		}

@@ -7,7 +7,7 @@ use std::{
 use anyhow::Context;
 use glam::{Affine3A, Vec3, Vec3A};
 use slotmap::{Key, SecondaryMap, SlotMap};
-use wgui::log::LogErr;
+use wgui::{i18n::Translation, log::LogErr};
 use wlx_common::{
     astr_containers::{AStrMap, AStrMapExt},
     config::SerializedWindowSet,
@@ -16,14 +16,15 @@ use wlx_common::{
 
 use crate::{
     FRAME_COUNTER,
-    backend::task::{OverlayTask, ToggleMode},
+    backend::task::{CreateOverlayTask, GlobalChange, OverlayTask, SpawnPos, ToggleMode},
     config::save_state,
     overlays::{
-        anchor::{create_anchor, create_grab_help},
+        anchor::{create_alltab_help, create_anchor, create_grab_help},
         custom::create_custom,
         dashboard::{DASH_NAME, create_dash_frontend},
         edit::EditWrapperManager,
         keyboard::create_keyboard,
+        passthrough::{PASSTHRU_PREFIX, new_passthru},
         screen::create_screens,
         toast::Toast,
         watch::{WATCH_NAME, create_watch},
@@ -34,11 +35,15 @@ use crate::{
         backend::{OverlayEventData, OverlayMeta},
         set::OverlayWindowSet,
         snap_upright,
-        window::{OverlayCategory, OverlayWindowData},
+        window::{
+            OverlayCategory, OverlayWindowData, save_transform, scalar_scale,
+            spawn_transform_from_parent,
+        },
     },
 };
 
 pub const MAX_OVERLAY_SETS: usize = 6;
+pub const GLOBAL_SET: &str = "global";
 
 pub struct OverlayWindowManager<T> {
     wrappers: EditWrapperManager,
@@ -78,8 +83,6 @@ where
             initialized: false,
         };
 
-        let mut wayland = false;
-
         if headless {
             log::info!("Running in headless mode; keyboard will be en-US");
         } else {
@@ -87,7 +90,8 @@ where
             // this is the default and would be overwritten by
             // OverlayWindowManager::restore_layout down below
             match create_screens(app) {
-                Ok((data, is_wayland)) => {
+                Ok((data, backend)) => {
+                    app.feats.desktop_backend = backend;
                     let last_idx = data.screens.len() - 1;
                     for (idx, (meta, mut config)) in data.screens.into_iter().enumerate() {
                         config.show_on_spawn = true;
@@ -99,14 +103,12 @@ where
                         }
                         app.screens.push(meta);
                     }
-
-                    wayland = is_wayland;
                 }
                 Err(e) => log::error!("Unable to initialize screens: {e:?}"),
             }
         }
 
-        let mut keyboard = OverlayWindowData::from_config(create_keyboard(app, wayland)?);
+        let mut keyboard = OverlayWindowData::from_config(create_keyboard(app)?);
         keyboard.config.show_on_spawn = true;
         me.keyboard_id = me.add(keyboard, app);
 
@@ -136,6 +138,16 @@ where
         let grab_help = OverlayWindowData::from_config(create_grab_help(app)?);
         me.add(grab_help, app);
 
+        let alttab_help = OverlayWindowData::from_config(create_alltab_help(app)?);
+        me.add(alttab_help, app);
+
+        #[cfg(feature = "whisper")]
+        {
+            use crate::overlays::whisper::create_whisper;
+            let whisper = OverlayWindowData::from_config(create_whisper(app)?);
+            me.add(whisper, app);
+        }
+
         let custom_panels = app.session.config.custom_panels.clone();
         for name in custom_panels {
             let Some(panel) = create_custom(app, name) else {
@@ -148,6 +160,28 @@ where
         // overwrite default layout with saved layout, if exists
         me.restore_layout(app);
         me.overlays_changed(app)?;
+
+        // recreate saved passthru overlays
+        let saved_passthrus: Vec<_> = app
+            .session
+            .config
+            .spawn_overlays
+            .iter()
+            .filter(|name| name.starts_with(PASSTHRU_PREFIX))
+            .cloned()
+            .collect();
+        for name in saved_passthrus {
+            if me.lookup(&name).is_none() {
+                let mut config = new_passthru(name.clone(), app);
+                config.show_on_spawn = me.global_set.hidden_overlays.arc_get(&name).is_none();
+
+                me.add_with_spawn_pos(
+                    OverlayWindowData::from_config(config),
+                    app,
+                    SpawnPos::FixedNoRealign,
+                );
+            }
+        }
 
         for id in [me.watch_id, me.keyboard_id] {
             for ev in [
@@ -177,11 +211,23 @@ where
             OverlayTask::ResetOverlay(sel) => {
                 if let Some(o) = self.mut_by_selector(&sel) {
                     let was_active = o.config.is_active();
-                    o.config.activate(app);
+                    o.config.activate(app, true);
                     if !was_active {
                         self.visible_overlays_changed(app)?;
                     }
                 }
+            }
+            OverlayTask::ResizeOverlay(sel, size) => {
+                let Some(id) = self.id_by_selector(&sel) else {
+                    log::warn!("Overlay not found for task: {sel:?}");
+                    return Ok(());
+                };
+
+                let o = &mut self.overlays[id];
+
+                o.config
+                    .backend
+                    .notify(app, OverlayEventData::ResizeRequest(size))?;
             }
             OverlayTask::ToggleOverlay(sel, mode) => {
                 let Some(id) = self.id_by_selector(&sel) else {
@@ -217,11 +263,9 @@ where
                     o.config.reset(app, false);
                 } else {
                     // no saved state
-                    o.config.activate(app);
+                    o.config.activate(app, true);
                 }
                 self.visible_overlays_changed(app)?;
-
-                return Ok(());
             }
             OverlayTask::ToggleEditMode => {
                 self.set_edit_mode(!self.edit_mode, app)?;
@@ -231,7 +275,7 @@ where
                     self.mut_by_selector(&OverlaySelector::Name(DASH_NAME.into()))
                 {
                     if overlay.config.active_state.is_none() {
-                        overlay.config.activate(app);
+                        overlay.config.activate(app, true);
                     } else {
                         overlay.config.deactivate();
                     }
@@ -243,8 +287,8 @@ where
                 if new_idx >= MAX_OVERLAY_SETS {
                     Toast::new(
                         ToastTopic::System,
-                        "TOAST.CANNOT_ADD_SET".into(),
-                        "TOAST.MAXIMUM_SETS_REACHED".into(),
+                        Some(Translation::from_translation_key("TOAST.CANNOT_ADD_SET")),
+                        Translation::from_translation_key("TOAST.MAXIMUM_SETS_REACHED"),
                     )
                     .with_timeout(5.)
                     .with_sound(true)
@@ -253,7 +297,7 @@ where
                 }
                 self.sets.push(OverlayWindowSet::default());
                 self.switch_to_set(app, Some(new_idx), false);
-                self.overlays[self.keyboard_id].config.activate(app);
+                self.overlays[self.keyboard_id].config.activate(app, true);
                 self.sets_changed(app);
                 self.visible_overlays_changed(app)?;
             }
@@ -261,8 +305,8 @@ where
                 let Some(set) = self.current_set else {
                     Toast::new(
                         ToastTopic::System,
-                        "TOAST.CANNOT_REMOVE_SET".into(),
-                        "TOAST.NO_SET_SELECTED".into(),
+                        Some(Translation::from_translation_key("TOAST.CANNOT_REMOVE_SET")),
+                        Translation::from_translation_key("TOAST.NO_SET_SELECTED"),
                     )
                     .with_timeout(5.)
                     .with_sound(true)
@@ -273,8 +317,8 @@ where
                 if self.sets.len() <= 1 {
                     Toast::new(
                         ToastTopic::System,
-                        "TOAST.CANNOT_REMOVE_SET".into(),
-                        "TOAST.LAST_EXISTING_SET".into(),
+                        Some(Translation::from_translation_key("TOAST.CANNOT_REMOVE_SET")),
+                        Translation::from_translation_key("TOAST.LAST_EXISTING_SET"),
                     )
                     .with_timeout(5.)
                     .with_sound(true)
@@ -287,7 +331,17 @@ where
                 self.restore_set = 0;
                 self.sets_changed(app);
             }
-            OverlayTask::SettingsChanged => {
+            OverlayTask::GlobalChange(GlobalChange::Settings) => {
+                if let Some(watch) = self.mut_by_id(self.watch_id)
+                    && app.session.config.enable_watch != watch.config.active_state.is_some()
+                {
+                    if watch.config.active_state.is_some() {
+                        watch.config.deactivate();
+                    } else {
+                        watch.config.activate(app, true);
+                    }
+                }
+
                 for o in self.overlays.values_mut() {
                     let _ = o
                         .config
@@ -296,14 +350,28 @@ where
                         .log_err("Could not notify SettingsChanged");
                 }
             }
-            OverlayTask::KeyboardChanged => {
+            OverlayTask::GlobalChange(GlobalChange::Keyboard) => {
                 self.overlays_changed(app)?;
                 self.sets_changed(app);
             }
-            OverlayTask::CleanupMirrors => {
+            OverlayTask::GlobalChange(GlobalChange::ColorPalette) => {
+                {
+                    let mut globals = app.wgui_globals.get();
+                    globals.palette =
+                        wlx_common::palette::load_palette(&app.session.config.color_palette);
+                }
+
+                for o in self.overlays.values_mut() {
+                    let _ = o
+                        .config
+                        .backend
+                        .notify(app, OverlayEventData::ColorPaletteRefresh);
+                }
+            }
+            OverlayTask::CleanupOverlays(category) => {
                 let mut ids_to_remove = vec![];
                 for (oid, o) in &self.overlays {
-                    if !matches!(o.config.category, OverlayCategory::Mirror) {
+                    if o.config.category == category {
                         continue;
                     }
                     if o.config.active_state.is_some() {
@@ -328,31 +396,31 @@ where
                     log::warn!("Overlay not found for task: {sel:?}");
                 }
             }
-            OverlayTask::Create(sel, f) => {
-                let None = self.mut_by_selector(&sel) else {
-                    log::debug!("Could not create {sel:?}: exists");
-                    return Ok(());
-                };
-
-                let Some(overlay_config) = f(app) else {
-                    log::debug!("Could not create {sel:?}: empty config");
-                    return Ok(());
-                };
-
-                self.add(
-                    OverlayWindowData {
-                        birthframe: FRAME_COUNTER.load(Ordering::Relaxed),
-                        ..OverlayWindowData::from_config(overlay_config)
-                    },
-                    app,
-                );
+            OverlayTask::Spawn(sel, spawn_pos, f) => {
+                self.spawn_overlay(app, sel, spawn_pos, f);
             }
             OverlayTask::Drop(sel) => {
+                let (id, name) = match &sel {
+                    OverlaySelector::Id(id) => {
+                        let id = *id;
+                        let name = self.overlays.get(id).map(|o| o.config.name.clone());
+                        (Some(id), name)
+                    }
+                    OverlaySelector::Name(name) => {
+                        let id = self.lookup(name);
+                        (id, Some(name.clone()))
+                    }
+                    _ => (None, None),
+                };
+
                 if let Some(o) = self.mut_by_selector(&sel)
                     && o.birthframe < FRAME_COUNTER.load(Ordering::Relaxed)
                     && let Some(o) = self.remove_by_selector(&sel, app)
                 {
                     log::debug!("Dropping overlay {}", o.config.name);
+                    if let (Some(id), Some(name)) = (id, name) {
+                        self.remove_saved_state(id, &name);
+                    }
                     self.dropped_overlays.push_back(o);
                 }
             }
@@ -368,7 +436,7 @@ where
                     ) {
                         log::warn!(
                             "Received command for '{}', but this overlay does not support commands",
-                            &task.overlay
+                            task.overlay
                         );
                         return Ok(());
                     }
@@ -385,12 +453,40 @@ where
         }
         Ok(())
     }
+
+    fn spawn_overlay(
+        &mut self,
+        app: &mut AppState,
+        sel: OverlaySelector,
+        spawn_pos: SpawnPos,
+        f: Box<CreateOverlayTask>,
+    ) {
+        let None = self.mut_by_selector(&sel) else {
+            log::debug!("Could not spawn {sel:?}: exists");
+            return;
+        };
+
+        let Some(overlay_config) = f(app) else {
+            log::debug!("Could not spawn {sel:?}: empty config");
+            return;
+        };
+
+        self.add_with_spawn_pos(
+            OverlayWindowData {
+                birthframe: FRAME_COUNTER.load(Ordering::Relaxed),
+                ..OverlayWindowData::from_config(overlay_config)
+            },
+            app,
+            spawn_pos,
+        );
+    }
 }
 
-const SAVED_ATTRIBS: [BackendAttrib; 3] = [
+const SAVED_ATTRIBS: &[BackendAttrib] = &[
     BackendAttrib::Stereo,
     BackendAttrib::StereoFullFrame,
     BackendAttrib::MouseTransform,
+    BackendAttrib::WindowSize,
 ];
 
 impl<T> OverlayWindowManager<T> {
@@ -398,8 +494,18 @@ impl<T> OverlayWindowManager<T> {
         self.dropped_overlays.pop_front()
     }
 
+    fn remove_saved_state(&mut self, id: OverlayID, name: &str) {
+        for set in &mut self.sets {
+            set.overlays.retain(|k, _| k != id);
+            set.inactive_overlays.arc_rm(name);
+            set.hidden_overlays.arc_rm(name);
+        }
+        self.global_set.inactive_overlays.arc_rm(name);
+        self.global_set.hidden_overlays.arc_rm(name);
+    }
+
     pub fn persist_layout(&mut self, app: &mut AppState) {
-        app.session.config.global_set.clear();
+        app.session.config.spawn_overlays.clear();
         app.session.config.sets.clear();
         app.session.config.sets.reserve(self.sets.len());
         app.session.config.last_set = self.restore_set as _;
@@ -429,7 +535,12 @@ impl<T> OverlayWindowManager<T> {
                 }
             }
 
-            let hidden_overlays: HashMap<_, _> = set.hidden_overlays.iter().cloned().collect();
+            let hidden_overlays: HashMap<_, _> = set
+                .hidden_overlays
+                .iter()
+                .filter(|(k, _)| !overlays.contains_key(k.as_ref()))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
 
             let serialized = SerializedWindowSet {
                 name: set.name.clone(),
@@ -439,30 +550,52 @@ impl<T> OverlayWindowManager<T> {
             app.session.config.sets.push(serialized);
         }
 
-        // global overlays; watch, toast
-        for oid in &[self.watch_id] {
-            let Some(o) = self.get_by_id(*oid) else {
-                break;
-            };
-            let Some(state) = o.config.active_state.clone() else {
-                break;
-            };
-            app.session
-                .config
-                .global_set
-                .insert(o.config.name.clone(), state.clone());
+        for o in self.overlays.values() {
+            if matches!(o.config.category, OverlayCategory::Passthru) {
+                app.session
+                    .config
+                    .spawn_overlays
+                    .push(o.config.name.clone());
+            }
         }
+
+        // serialize global set into `sets` with key GLOBAL_SET
+        // overlays: active states + inactive states; hidden_overlays: explicitly toggled off
+        let mut global_overlays: HashMap<_, _> =
+            self.global_set.inactive_overlays.iter().cloned().collect();
+        for o in self.overlays.values() {
+            if o.config.global
+                && let Some(state) = &o.config.active_state
+            {
+                global_overlays.insert(o.config.name.clone(), state.clone());
+            }
+        }
+        let global_hidden: HashMap<_, _> = self
+            .global_set
+            .hidden_overlays
+            .iter()
+            .filter(|(k, _)| !global_overlays.contains_key(k.as_ref()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        app.session.config.sets.push(SerializedWindowSet {
+            name: GLOBAL_SET.into(),
+            overlays: global_overlays,
+            hidden_overlays: global_hidden,
+        });
 
         // BackendAttrib
         for o in self.overlays.values() {
-            app.session.config.attribs.arc_set(
-                o.config.name.clone(),
-                SAVED_ATTRIBS
-                    .iter()
-                    .filter_map(|a| o.config.backend.get_attrib(*a))
-                    .filter(|val| !val.is_default())
-                    .collect(),
-            );
+            let attrs: Vec<_> = SAVED_ATTRIBS
+                .iter()
+                .filter_map(|a| o.config.backend.get_attrib(*a))
+                .filter(|val| !val.is_default())
+                .collect();
+            if !attrs.is_empty() {
+                app.session
+                    .config
+                    .attribs
+                    .arc_set(o.config.name.clone(), attrs);
+            }
         }
 
         if restore_after {
@@ -485,6 +618,10 @@ impl<T> OverlayWindowManager<T> {
         self.sets.reserve(app.session.config.sets.len());
 
         for (i, s) in app.session.config.sets.iter().enumerate() {
+            if s.name.as_ref() == GLOBAL_SET {
+                continue;
+            }
+
             let mut overlays = SecondaryMap::new();
             let mut inactive_overlays = AStrMap::new();
 
@@ -514,33 +651,69 @@ impl<T> OverlayWindowManager<T> {
             });
         }
 
-        // global overlays
-        for (name, ows) in app.session.config.global_set.clone() {
-            let mut ows = ows.clone();
+        // global overlays: prefer `sets` with key GLOBAL_SET, fall back to legacy `global_set`
+        if let Some(global_s) = app
+            .session
+            .config
+            .sets
+            .iter()
+            .find(|s| s.name.as_ref() == GLOBAL_SET)
+        {
+            let global_s = global_s.clone();
+            let mut overlays = SecondaryMap::new();
+            let mut inactive_overlays = AStrMap::new();
 
-            // fix angle_fade missing on watch if loading older state
-            if name.as_ref() == WATCH_NAME {
-                ows.angle_fade = true;
+            for (name, o) in &global_s.overlays {
+                if let Some(id) = self.lookup(name) {
+                    log::debug!("global set: loaded state for {name}");
+                    overlays.insert(id, o.clone());
+                    if let Some(ov) = self.mut_by_id(id)
+                        && ov.config.active_state.is_some()
+                    {
+                        ov.config.global = true;
+                        ov.config.active_state = Some(o.clone());
+                        ov.config.reset(app, false);
+                    }
+                } else {
+                    log::debug!(
+                        "global set has saved state for {name} which doesn't exist. will apply state once added."
+                    );
+                    inactive_overlays.arc_set(name.clone(), o.clone());
+                }
             }
 
-            if let Some(oid) = self.lookup(&name)
-                && let Some(o) = self.mut_by_id(oid)
-            {
-                o.config.global = true;
-                if o.config.active_state.is_none() {
-                    self.global_set.hidden_overlays.arc_set(name.clone(), ows);
-                } else {
+            let hidden_overlays: AStrMap<_> = global_s
+                .hidden_overlays
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+
+            self.global_set.overlays = overlays;
+            self.global_set.inactive_overlays = inactive_overlays;
+            self.global_set.hidden_overlays = hidden_overlays;
+        } else {
+            for (name, ows) in app.session.config.global_set.clone() {
+                let mut ows = ows.clone();
+
+                // fix angle_fade missing on watch if loading older state
+                if name.as_ref() == WATCH_NAME {
+                    ows.angle_fade = true;
+                }
+
+                if let Some(oid) = self.lookup(&name)
+                    && let Some(o) = self.mut_by_id(oid)
+                    && o.config.active_state.is_some()
+                {
+                    o.config.global = true;
                     o.config.active_state = Some(ows);
                     o.config.reset(app, false);
+                    log::debug!("global set: loaded state for {name}");
+                } else {
+                    log::debug!(
+                        "global set has saved state for {name} which doesn't exist or is inactive. will apply state once added."
+                    );
+                    self.global_set.inactive_overlays.arc_set(name.clone(), ows);
                 }
-                log::debug!("global set: loaded state for {name}");
-            } else {
-                log::debug!(
-                    "global set has saved state for {name} which doesn't exist. will apply state once added."
-                );
-                self.global_set
-                    .inactive_overlays
-                    .arc_set(name.clone(), ows.clone());
             }
         }
 
@@ -575,6 +748,19 @@ impl<T> OverlayWindowManager<T> {
     pub fn set_edit_mode(&mut self, enabled: bool, app: &mut AppState) -> anyhow::Result<()> {
         let changed = enabled != self.edit_mode;
         self.edit_mode = enabled;
+
+        if changed && let Some(watch) = self.mut_by_id(self.watch_id) {
+            watch
+                .config
+                .active_state
+                .iter_mut()
+                .for_each(|f| f.grabbable = enabled);
+            watch
+                .config
+                .backend
+                .notify(app, OverlayEventData::EditModeChanged(enabled))?;
+        }
+
         if !enabled {
             for o in self.overlays.values_mut() {
                 self.wrappers.unwrap_edit_mode(&mut o.config, app)?;
@@ -586,17 +772,6 @@ impl<T> OverlayWindowManager<T> {
                     log::error!("Could not save state: {e:?}");
                 }
             }
-        }
-        if changed && let Some(watch) = self.mut_by_id(self.watch_id) {
-            watch
-                .config
-                .active_state
-                .iter_mut()
-                .for_each(|f| f.grabbable = enabled);
-            watch
-                .config
-                .backend
-                .notify(app, OverlayEventData::EditModeChanged(enabled))?;
         }
         Ok(())
     }
@@ -622,12 +797,12 @@ impl<T> OverlayWindowManager<T> {
             self.wrappers
                 .wrap_edit_mode(id, &mut overlay.config, app)
                 .inspect_err(|e| log::error!("{e:?}"))
-                .unwrap(); // FIXME: unwrap
+                .unwrap();
         } else {
             self.wrappers
                 .unwrap_edit_mode(&mut overlay.config, app)
                 .inspect_err(|e| log::error!("{e:?}"))
-                .unwrap(); // FIXME: unwrap
+                .unwrap();
         }
     }
 
@@ -673,10 +848,6 @@ impl<T> OverlayWindowManager<T> {
         ret_val
     }
 
-    pub fn get_by_id(&mut self, id: OverlayID) -> Option<&OverlayWindowData<T>> {
-        self.overlays.get(id)
-    }
-
     pub fn mut_by_id(&mut self, id: OverlayID) -> Option<&mut OverlayWindowData<T>> {
         self.overlays.get_mut(id)
     }
@@ -705,7 +876,16 @@ impl<T> OverlayWindowManager<T> {
             .map(|(k, _)| k)
     }
 
-    pub fn add(&mut self, mut overlay: OverlayWindowData<T>, app: &mut AppState) -> OverlayID {
+    pub fn add(&mut self, overlay: OverlayWindowData<T>, app: &mut AppState) -> OverlayID {
+        self.add_with_spawn_pos(overlay, app, SpawnPos::Fixed)
+    }
+
+    fn add_with_spawn_pos(
+        &mut self,
+        mut overlay: OverlayWindowData<T>,
+        app: &mut AppState,
+        spawn_pos: SpawnPos,
+    ) -> OverlayID {
         while self.lookup(&overlay.config.name).is_some() {
             log::error!(
                 "An overlay with name {} already exists. Deduplicating, but things may break!",
@@ -738,6 +918,19 @@ impl<T> OverlayWindowManager<T> {
                     log::debug!("loaded state for {name} to set {i}");
                 }
             }
+        } else if let Some(state) = self.global_set.inactive_overlays.arc_rm(&name) {
+            let o = &mut self.overlays[oid];
+            o.config.active_state = Some(state);
+            o.config.reset(app, false);
+            shown = true;
+            log::debug!("loaded state for {name} from global_set!");
+        }
+
+        let saved_attribs = app.session.config.attribs.arc_get(&name).cloned();
+        if let Some(attribs) = saved_attribs {
+            for value in attribs {
+                self.overlays[oid].config.backend.set_attrib(app, value);
+            }
         }
 
         self.overlays[oid]
@@ -748,7 +941,10 @@ impl<T> OverlayWindowManager<T> {
 
         if !shown && show_on_spawn {
             log::debug!("activating {name} due to show_on_spawn");
-            self.overlays[oid].config.activate(app);
+            self.overlays[oid]
+                .config
+                .activate(app, !spawn_pos.is_fixed_no_realign());
+            self.apply_spawn_pos(app, oid, spawn_pos);
         }
         if !internal && let Err(e) = self.overlays_changed(app) {
             log::error!("Error while adding overlay: {e:?}");
@@ -757,6 +953,72 @@ impl<T> OverlayWindowManager<T> {
             log::error!("Error while adding overlay: {e:?}");
         }
         oid
+    }
+
+    fn apply_spawn_pos(&mut self, app: &mut AppState, oid: OverlayID, spawn_pos: SpawnPos) {
+        match spawn_pos {
+            SpawnPos::Fixed | SpawnPos::FixedNoRealign => {}
+            SpawnPos::Spread => {
+                let Some(parent_id) = self.spread_parent_for(oid) else {
+                    return;
+                };
+                let parent = OverlaySelector::Id(parent_id);
+                let _ = self.offset_spawn_from_parent(app, oid, &parent);
+            }
+            SpawnPos::Parent(parent) => {
+                let _ = self.offset_spawn_from_parent(app, oid, &parent);
+            }
+        }
+    }
+
+    // TODO: this just uses the last spawned overlay as parent, can probably do better?
+    fn spread_parent_for(&self, oid: OverlayID) -> Option<OverlayID> {
+        self.overlays
+            .iter()
+            .filter(|(id, overlay)| {
+                *id != oid
+                    && overlay.config.active_state.is_some()
+                    && matches!(
+                        overlay.config.category,
+                        OverlayCategory::Panel | OverlayCategory::WayVR | OverlayCategory::Screen
+                    )
+            })
+            .max_by_key(|(_, overlay)| overlay.birthframe)
+            .map(|(id, _)| id)
+    }
+
+    fn offset_spawn_from_parent(
+        &mut self,
+        app: &mut AppState,
+        oid: OverlayID,
+        parent: &OverlaySelector,
+    ) -> Option<()> {
+        let parent_id = self.id_by_selector(parent)?;
+
+        if parent_id == oid {
+            return None;
+        }
+
+        let parent_transform = self
+            .overlays
+            .get(parent_id)?
+            .config
+            .active_state
+            .as_ref()?
+            .transform;
+
+        let overlay = self.overlays.get_mut(oid)?;
+        let state = overlay.config.active_state.as_mut()?;
+
+        let child_scale = scalar_scale(&overlay.config.default_state.transform);
+        let spawn_transform =
+            spawn_transform_from_parent(&parent_transform, &app.input_state.hmd, child_scale);
+
+        state.transform = spawn_transform;
+        save_transform(state, app);
+        overlay.config.dirty = true;
+
+        Some(())
     }
 
     pub fn switch_or_toggle_set(&mut self, app: &mut AppState, set: usize) {
@@ -815,8 +1077,8 @@ impl<T> OverlayWindowManager<T> {
             if !self.edit_mode && self.initialized && num_overlays < 1 {
                 Toast::new(
                     ToastTopic::System,
-                    "TOAST.EMPTY_SET".into(),
-                    "TOAST.LETS_ADD_OVERLAYS".into(),
+                    Some(Translation::from_translation_key("TOAST.EMPTY_SET")),
+                    Translation::from_translation_key("TOAST.LETS_ADD_OVERLAYS"),
                 )
                 .with_timeout(3.)
                 .submit(app);

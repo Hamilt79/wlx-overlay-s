@@ -1,4 +1,4 @@
-use std::{collections::HashMap, str::FromStr, sync::LazyLock};
+use std::{collections::HashMap, str::FromStr, sync::Arc, sync::LazyLock};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     config::{ConfigType, load_known_yaml},
     subsystem::hid::{
-        KEYS_TO_MODS, KeyType, META, NUM_LOCK, SHIFT, VirtualKey, XkbKeymap, get_key_type,
+        ALTGR, KEYS_TO_MODS, KeyType, NUM_LOCK, SHIFT, VirtualKey, XkbKeymap, get_key_type,
     },
 };
 
@@ -15,7 +15,7 @@ use super::KeyButtonData;
 static MACRO_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^([A-Za-z0-9_-]+)(?: +(UP|DOWN))?$").unwrap()); // want panic
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[allow(clippy::struct_field_names)]
 pub struct Layout {
     pub(super) row_size: f32,
@@ -66,11 +66,27 @@ impl Layout {
         has_altgr: bool,
         col: usize,
         row: usize,
+        keyboard_layouts: &[Arc<str>],
     ) -> Option<KeyData> {
         let key = self.main_layout[row][col].as_ref()?;
         let mut label = Vec::with_capacity(3);
         let mut cap_type = KeyCapType::Letter;
         let button_state: KeyButtonData;
+
+        if key == "KEYMAP_CYCLE" {
+            button_state = KeyButtonData::KeymapSwitch {
+                layouts: keyboard_layouts.to_vec(),
+            };
+            let keymap_name = keymap
+                .as_ref()
+                .and_then(|m| m.get_name())
+                .unwrap_or("Layout");
+            return Some(KeyData {
+                label: vec![keymap_name.into()],
+                button_state,
+                cap_type: KeyCapType::Other,
+            });
+        }
 
         if let Ok(vk) = VirtualKey::from_str(key) {
             if let Some(keymap) = keymap.as_ref() {
@@ -83,7 +99,7 @@ impl Layout {
                             label.push(label1);
                             if has_altgr {
                                 cap_type = KeyCapType::LetterAltGr;
-                                label.push(keymap.label_for_key(vk, META));
+                                label.push(keymap.label_for_key(vk, ALTGR));
                             } else {
                                 cap_type = KeyCapType::Letter;
                             }
@@ -91,7 +107,7 @@ impl Layout {
                             label.push(label0);
                             label.push(label1);
                             if has_altgr {
-                                label.push(keymap.label_for_key(vk, META));
+                                label.push(keymap.label_for_key(vk, ALTGR));
                                 cap_type = KeyCapType::SymbolAltGr;
                             } else {
                                 cap_type = KeyCapType::Symbol;

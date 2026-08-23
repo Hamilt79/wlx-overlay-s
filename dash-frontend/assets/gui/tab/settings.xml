@@ -13,8 +13,13 @@
   </template>
 
   <template name="SliderSetting">
-    <label text="${text}" translation="${translation}" />
-    <Slider id="${id}" width="250" height="24" min_value="${min}" max_value="${max}" step="${step}" value="${value}" tooltip="${tooltip}" />
+    <Slider id="${id}" width="200" height="24" min_value="${min}" max_value="${max}" step="${step}" value="${value}" tooltip="${tooltip}" />
+    <label text="${text}" weight="bold" translation="${translation}" />
+  </template>
+
+  <template name="RangeSetting">
+    <Slider id="${id}" width="200" height="24" min_value="${min}" max_value="${max}" step="${step}" value="${value}" value2="${value2}" tooltip="${tooltip}" />
+    <label text="${text}" weight="bold" translation="${translation}" />
   </template>
 
   <template name="SelectSetting">
@@ -26,8 +31,22 @@
     <RadioBox text="${text}" translation="${translation}" value="${value}" tooltip="${tooltip}" />
   </template>
 
+  <template name="StatRow">
+    <div flex_direction="row" justify_content="space_between" align_items="center" gap="12" width="100%">
+      <label weight="bold" translation="${translation}" />
+      <label id="${id}" weight="bold" />
+    </div>
+  </template>
+
+  <template name="ButtonText">
+    <Button id="${id}" height="32" tooltip="${translation}_HELP" padding="4" gap="8">
+      <sprite src_builtin="${icon}" height="24" width="24" />
+      <label align="left" translation="${translation}" weight="bold" min_width="200" />
+    </Button>
+  </template>
+
   <template name="DangerButton">
-    <Button id="${id}" color="#AA3333" height="32" tooltip="${translation}_HELP" padding="4" gap="8">
+    <Button id="${id}" color="danger" border_color="danger(rgb-mult-0.5)" height="32" tooltip="${translation}_HELP" padding="4" gap="8">
       <sprite src_builtin="${icon}" height="24" width="24" />
       <label align="left" translation="${translation}" weight="bold" min_width="200" />
     </Button>
@@ -35,7 +54,8 @@
 
   <template name="AutostartApp">
     <div id="${id}_root" flex_direction="row">
-      <Button id="${id}" color="#AA3333" height="24" padding="4" margin_top="-2" margin_bottom="-2">
+      <Button id="${id}" color="#AA3333" height="24" padding="4" margin_top="-2" margin_bottom="-2"
+        hover_color="danger" hover_border_color="danger(rgb-mult-0.5)" >
         <sprite src_builtin="dashboard/close.svg" height="20" width="20" />
       </Button>
       <div padding_left="8">
@@ -44,16 +64,20 @@
     </div>
   </template>
 
+  <macro name="tab_style" color="background" />
+
   <elements>
     <div gap="4">
       <Tabs id="tabs">
-        <Tab name="look_and_feel" translation="APP_SETTINGS.LOOK_AND_FEEL" sprite_src_builtin="dashboard/palette.svg" />
-        <Tab name="skybox" translation="APP_SETTINGS.SKYBOX" sprite_src_builtin="dashboard/globe.svg" />
-        <Tab name="features" translation="APP_SETTINGS.FEATURES" sprite_src_builtin="dashboard/options.svg" />
-        <Tab name="controls" translation="APP_SETTINGS.CONTROLS" sprite_src_builtin="dashboard/controller.svg" />
-        <Tab name="misc" translation="APP_SETTINGS.MISC" sprite_src_builtin="dashboard/blocks.svg" />
-        <Tab name="autostart_apps" translation="APP_SETTINGS.AUTOSTART_APPS" sprite_src_builtin="dashboard/apps.svg" />
-        <Tab name="troubleshooting" translation="APP_SETTINGS.TROUBLESHOOTING" sprite_src_builtin="dashboard/cpu.svg" />
+        <Tab macro="tab_style" name="look_and_feel" translation="APP_SETTINGS.LOOK_AND_FEEL" sprite_src_builtin="dashboard/palette.svg" />
+        <Tab macro="tab_style" name="skybox" translation="APP_SETTINGS.SKYBOX" sprite_src_builtin="dashboard/globe.svg" />
+        <Tab macro="tab_style" name="features" translation="APP_SETTINGS.FEATURES" sprite_src_builtin="dashboard/options.svg" />
+        <Tab macro="tab_style" name="controls" translation="APP_SETTINGS.CONTROLS" sprite_src_builtin="dashboard/controller.svg" />
+        <Tab macro="tab_style" name="space_drag" translation="APP_SETTINGS.SPACE_DRAG" sprite_src_builtin="dashboard/drag.svg" />
+        <Tab macro="tab_style" name="misc" translation="APP_SETTINGS.MISC" sprite_src_builtin="dashboard/blocks.svg" />
+        <Tab macro="tab_style" name="autostart_apps" translation="APP_SETTINGS.AUTOSTART_APPS" sprite_src_builtin="dashboard/apps.svg" />
+        <Tab macro="tab_style" name="statistics" translation="APP_SETTINGS.STATISTICS" sprite_src_builtin="dashboard/barchart.svg" />
+        <Tab macro="tab_style" name="troubleshooting" translation="APP_SETTINGS.TROUBLESHOOTING" sprite_src_builtin="dashboard/cpu.svg" />
       </Tabs>
       <div flex_wrap="wrap" justify_content="stretch" gap="4" id="settings_root" width="100%">
         <!-- filled-in at runtime -->

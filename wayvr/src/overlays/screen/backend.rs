@@ -3,17 +3,18 @@ use std::{
     time::Instant,
 };
 
-use glam::{Affine2, Vec2, vec2};
+use glam::{Affine2, DVec2, Vec2, vec2};
 use wlx_capture::{WlxCapture, frame::Transform};
 
 use crate::{
-    backend::{
-        XrBackend,
-        input::{HoverResult, PointerHit, PointerMode},
-    },
+    XrBackend,
+    backend::input::{HoverResult, PointerHit, PointerMode},
     overlays::screen::capture::MyFirstDmaExporter,
     state::AppState,
-    subsystem::hid::{MOUSE_LEFT, MOUSE_MIDDLE, MOUSE_RIGHT, WheelDelta},
+    subsystem::{
+        hid::{MOUSE_LEFT, MOUSE_MIDDLE, MOUSE_RIGHT, WheelDelta},
+        input::InputFocus,
+    },
     windowing::backend::{
         FrameMeta, OverlayBackend, OverlayEventData, RenderResources, ShouldRender, ui_transform,
     },
@@ -59,7 +60,6 @@ pub struct ScreenBackend {
     stereo_adjust_mouse: bool,
     pub(super) logical_pos: Vec2,
     pub(super) logical_size: Vec2,
-    pub(super) mouse_transform_original: Transform,
     mouse_transform_override: MouseTransform,
     just_resumed: bool,
 }
@@ -80,22 +80,17 @@ impl ScreenBackend {
             meta: None,
             mouse_transform: Affine2::ZERO,
             interaction_transform: None,
-            stereo: if matches!(xr_backend, XrBackend::OpenXR) {
-                Some(StereoMode::None)
-            } else {
-                None
-            },
+            stereo: xr_backend.is_open_xr().then_some(StereoMode::None),
             stereo_full_frame: false,
             stereo_adjust_mouse: false,
             logical_pos: Vec2::ZERO,
             logical_size: Vec2::ZERO,
-            mouse_transform_original: Transform::Undefined,
             mouse_transform_override: MouseTransform::Default,
             just_resumed: false,
         }
     }
 
-    pub(super) fn apply_mouse_transform_with_override(&mut self, override_transform: Transform) {
+    pub(super) fn apply_mouse_transform_with_override(&mut self, transform: Transform) {
         let mut size = self.logical_size;
         let pos = self.logical_pos;
 
@@ -108,11 +103,6 @@ impl ScreenBackend {
                 _ => {}
             }
         }
-
-        let transform = match override_transform {
-            Transform::Undefined => self.mouse_transform_original,
-            other => other,
-        };
 
         self.mouse_transform = match transform {
             Transform::Normal | Transform::Undefined => {
@@ -238,16 +228,20 @@ impl OverlayBackend for ScreenBackend {
             }
 
             if let Some(pipeline) = self.pipeline.as_mut() {
-                if self.meta.is_some_and(|old| old.extent != meta.extent) {
-                    pipeline.set_extent(
+                if self.meta.is_some_and(|old| old.extent != meta.extent)
+                    || frame.format.transform != pipeline.transform()
+                {
+                    pipeline.set_layout(
                         app,
                         [meta.extent[0] as _, meta.extent[1] as _],
                         [0., 0.],
+                        frame.format.transform,
                     )?;
                     self.interaction_transform = Some(ui_transform(meta.extent));
                 }
             } else {
-                let pipeline = ScreenPipeline::new(&meta, app, stereo, [0., 0.])?;
+                let pipeline =
+                    ScreenPipeline::new(&meta, app, stereo, [0., 0.], frame.format.transform)?;
                 self.pipeline = Some(pipeline);
                 self.interaction_transform = Some(ui_transform(meta.extent));
             }
@@ -301,18 +295,25 @@ impl OverlayBackend for ScreenBackend {
     fn on_hover(&mut self, app: &mut AppState, hit: &PointerHit) -> HoverResult {
         #[cfg(debug_assertions)]
         log::trace!("Hover: {:?}", hit.uv);
+
+        let pick_now = app.input_state.picking_focus.is_picking();
+        if pick_now {
+            app.input_state.stop_picking();
+            app.hid_provider
+                .set_input_focus(app.wvr_server.as_mut(), InputFocus::PhysicalScreen);
+        }
+
         if can_move()
             && (!app.session.config.focus_follows_mouse_mode
                 || app.input_state.pointers[hit.pointer].now.move_mouse)
         {
             let pos = self.mouse_transform.transform_point2(hit.uv);
-            app.hid_provider.inner.mouse_move(pos);
+            app.hid_provider
+                .inner
+                .mouse_move(DVec2::new(pos.x as _, pos.y as _));
             set_next_move(app.session.config.mouse_move_interval_ms as _);
         }
-        HoverResult {
-            consume: true,
-            ..HoverResult::default()
-        }
+        HoverResult::consume()
     }
     fn on_pointer(&mut self, app: &mut AppState, hit: &PointerHit, pressed: bool) {
         let mut btn = match hit.mode {
@@ -340,10 +341,15 @@ impl OverlayBackend for ScreenBackend {
             return;
         }
         let pos = self.mouse_transform.transform_point2(hit.uv);
-        app.hid_provider.inner.mouse_move(pos);
+        app.hid_provider
+            .inner
+            .mouse_move(DVec2::new(pos.x as _, pos.y as _));
     }
 
-    fn on_scroll(&mut self, app: &mut AppState, _hit: &PointerHit, delta: WheelDelta) {
+    fn on_scroll(&mut self, app: &mut AppState, _hit: &PointerHit, mut delta: WheelDelta) {
+        // convert to v120 value; maximum deflect scrolls at half speed
+        delta.x *= 60.0;
+        delta.y *= 60.0;
         app.hid_provider.inner.wheel(delta);
     }
 

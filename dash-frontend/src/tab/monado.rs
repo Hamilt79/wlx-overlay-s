@@ -13,7 +13,7 @@ use wgui::{
 	drawing::Color,
 	globals::WguiGlobals,
 	layout::{Layout, WidgetID},
-	parser::{self, Fetchable, ParseDocumentParams, ParserState},
+	parser::{self, Fetchable, ParseDocumentParams, ParserState, TemplateParams},
 	task::Tasks,
 };
 use wlx_common::{
@@ -28,16 +28,16 @@ use crate::{
 
 #[derive(Clone)]
 enum TabNameEnum {
-	GeneralSettings,
 	ProcessList,
+	GeneralSettings,
 	DebugTimings,
 }
 
 impl TabNameEnum {
 	fn from_string(s: &str) -> Option<Self> {
 		match s {
-			"general_settings" => Some(TabNameEnum::GeneralSettings),
 			"process_list" => Some(TabNameEnum::ProcessList),
+			"general_settings" => Some(TabNameEnum::GeneralSettings),
 			"debug_timings" => Some(TabNameEnum::DebugTimings),
 			_ => None,
 		}
@@ -51,7 +51,7 @@ enum Task {
 
 	// `ProcessList` tab
 	ProcessListRefresh,
-	ProcessListFocusClient(String),
+	ProcessListFocusClient(i64),
 
 	// `DebugTimings` tab
 	DebugTimingsRefreshSessionList,
@@ -126,8 +126,8 @@ struct SubtabDebugTimings {
 #[allow(clippy::large_enum_variant)]
 enum Subtab {
 	Empty,
-	GeneralSettings(SubtabGeneralSettings),
 	ProcessList(SubtabProcessList),
+	GeneralSettings(SubtabGeneralSettings),
 	DebugTimings(SubtabDebugTimings),
 }
 
@@ -157,9 +157,9 @@ impl<T> Tab<T> for TabMonado<T> {
 						process_list.refresh(frontend, data, &self.tasks)?;
 					}
 				}
-				Task::ProcessListFocusClient(client_name) => {
+				Task::ProcessListFocusClient(client_id) => {
 					if let Subtab::ProcessList(process_list) = &mut self.subtab {
-						process_list.focus_client(frontend, data, client_name, &self.tasks)?;
+						process_list.focus_client(frontend, data, client_id, &self.tasks)?;
 					}
 				}
 				Task::DebugTimingsRefreshSessionList => {
@@ -184,6 +184,10 @@ impl<T> Tab<T> for TabMonado<T> {
 				Task::SetTab(tab) => {
 					frontend.layout.remove_children(self.id_content);
 					match tab {
+						TabNameEnum::ProcessList => {
+							self.tasks.push(Task::ProcessListRefresh);
+							self.subtab = Subtab::ProcessList(SubtabProcessList::new(self.id_content, frontend)?)
+						}
 						TabNameEnum::GeneralSettings => {
 							self.subtab = Subtab::GeneralSettings(SubtabGeneralSettings::new(
 								self.id_content,
@@ -191,10 +195,6 @@ impl<T> Tab<T> for TabMonado<T> {
 								data,
 								&self.tasks,
 							)?)
-						}
-						TabNameEnum::ProcessList => {
-							self.tasks.push(Task::ProcessListRefresh);
-							self.subtab = Subtab::ProcessList(SubtabProcessList::new(self.id_content, frontend)?)
 						}
 						TabNameEnum::DebugTimings => {
 							self.subtab = Subtab::DebugTimings(SubtabDebugTimings::new(self.id_content, frontend, &self.tasks)?)
@@ -206,7 +206,6 @@ impl<T> Tab<T> for TabMonado<T> {
 
 		match &mut self.subtab {
 			Subtab::Empty => {}
-			Subtab::GeneralSettings(_) => {}
 			Subtab::ProcessList(_) => {
 				// every few seconds
 				if let Subtab::ProcessList(_) = &self.subtab
@@ -215,6 +214,7 @@ impl<T> Tab<T> for TabMonado<T> {
 					self.tasks.push(Task::ProcessListRefresh);
 				}
 			}
+			Subtab::GeneralSettings(_) => {}
 			Subtab::DebugTimings(timings) => {
 				timings.update(&self.tasks, data, frontend)?;
 			}
@@ -283,7 +283,7 @@ impl SubtabGeneralSettings {
 		// get brightness
 		let slider_brightness = state.fetch_component_as::<ComponentSlider>("slider_brightness")?;
 		if let Some(brightness) = frontend.interface.monado_brightness_get(data) {
-			slider_brightness.set_value(&mut frontend.layout.common(), brightness * 100.0);
+			slider_brightness.set_value_primary(&mut frontend.layout.common(), brightness * 100.0);
 
 			slider_brightness.on_value_changed({
 				let tasks = tasks.clone();
@@ -308,11 +308,11 @@ impl SubtabGeneralSettings {
 
 			// set initial values
 			let (rgb, range_h, range_s, range_v) = config.chroma_key_params.get_rgb_and_hsv_ranges();
-			slider_keying_curve.set_value(&mut common, config.chroma_key_params.curve * SLIDER_MULTIPLIER);
-			slider_keying_despill.set_value(&mut common, config.chroma_key_params.despill * SLIDER_MULTIPLIER);
-			slider_keying_hue_range.set_value(&mut common, range_h * SLIDER_MULTIPLIER);
-			slider_keying_saturation_range.set_value(&mut common, range_s * SLIDER_MULTIPLIER);
-			slider_keying_value_range.set_value(&mut common, range_v * SLIDER_MULTIPLIER);
+			slider_keying_curve.set_value_primary(&mut common, config.chroma_key_params.curve * SLIDER_MULTIPLIER);
+			slider_keying_despill.set_value_primary(&mut common, config.chroma_key_params.despill * SLIDER_MULTIPLIER);
+			slider_keying_hue_range.set_value_primary(&mut common, range_h * SLIDER_MULTIPLIER);
+			slider_keying_saturation_range.set_value_primary(&mut common, range_s * SLIDER_MULTIPLIER);
+			slider_keying_value_range.set_value_primary(&mut common, range_v * SLIDER_MULTIPLIER);
 			cs_keying.set_color(&mut common, rgb);
 
 			// prepare callbacks
@@ -333,12 +333,12 @@ impl SubtabGeneralSettings {
 					}
 				})
 			}
-			slider_keying_curve.on_value_changed(get_slider_callback(&tasks));
-			slider_keying_despill.on_value_changed(get_slider_callback(&tasks));
-			slider_keying_hue_range.on_value_changed(get_slider_callback(&tasks));
-			slider_keying_saturation_range.on_value_changed(get_slider_callback(&tasks));
-			slider_keying_value_range.on_value_changed(get_slider_callback(&tasks));
-			cs_keying.on_changed(get_color_selector_callback(&tasks));
+			slider_keying_curve.on_value_changed(get_slider_callback(tasks));
+			slider_keying_despill.on_value_changed(get_slider_callback(tasks));
+			slider_keying_hue_range.on_value_changed(get_slider_callback(tasks));
+			slider_keying_saturation_range.on_value_changed(get_slider_callback(tasks));
+			slider_keying_value_range.on_value_changed(get_slider_callback(tasks));
+			cs_keying.on_changed(get_color_selector_callback(tasks));
 		}
 
 		Ok(Self {
@@ -353,11 +353,11 @@ impl SubtabGeneralSettings {
 	}
 
 	fn chroma_update(&mut self, config: &mut GeneralConfig) {
-		let val_curve = self.slider_keying_curve.get_value();
-		let val_despill = self.slider_keying_despill.get_value();
-		let val_range_h = self.slider_keying_hue_range.get_value();
-		let val_range_s = self.slider_keying_saturation_range.get_value();
-		let val_range_v = self.slider_keying_value_range.get_value();
+		let val_curve = self.slider_keying_curve.get_value_primary();
+		let val_despill = self.slider_keying_despill.get_value_primary();
+		let val_range_h = self.slider_keying_hue_range.get_value_primary();
+		let val_range_s = self.slider_keying_saturation_range.get_value_primary();
+		let val_range_v = self.slider_keying_value_range.get_value_primary();
 		let val_rgb = self.cs_keying.get_color();
 
 		config.chroma_key_params.despill = val_despill / SLIDER_MULTIPLIER;
@@ -383,15 +383,16 @@ fn mount_sessions_list(
 	layout.remove_children(id_parent);
 
 	for (session_id, session) in sessions {
-		let mut params = HashMap::new();
+		let mut params = TemplateParams::new();
 
-		params.insert(
-			Rc::from("text"),
-			Rc::from(format!(
+		params.insert_rc(
+			"text",
+			format!(
 				"{} (ID {})",
 				session.resolved_name.as_ref().map_or("Unknown", |s| s.as_str()),
 				session_id,
-			)),
+			)
+			.into(),
 		);
 
 		let data = state.realize_template(
@@ -427,10 +428,10 @@ fn mount_graph(
 	limits: (f32, f32),
 ) -> anyhow::Result<DebugGraph> {
 	let globals = layout.state.globals.clone();
-	let mut params = HashMap::new();
-	params.insert(Rc::from("name"), Rc::from(name));
-	params.insert(Rc::from("limit_min"), Rc::from(limits.0.to_string()));
-	params.insert(Rc::from("limit_max"), Rc::from(limits.1.to_string()));
+	let mut params = TemplateParams::new();
+	params.insert("name", name);
+	params.insert_rc("limit_min", limits.0.to_string().into());
+	params.insert_rc("limit_max", limits.1.to_string().into());
 
 	let data = state.realize_template(
 		&doc_params_tab_debug_timings(&globals),
@@ -652,25 +653,15 @@ impl SubtabProcessList {
 		client: &dash_interface::MonadoClient,
 		tasks: &Tasks<Task>,
 	) -> anyhow::Result<()> {
-		let mut par = HashMap::<Rc<str>, Rc<str>>::new();
-		par.insert(
-			"checked".into(),
-			if client.is_primary {
-				Rc::from("1")
-			} else {
-				Rc::from("0")
-			},
-		);
-		par.insert(
-			"name".into(),
-			format!("{} (Client ID: {})", client.name, client.id).into(),
-		);
-		par.insert("flag_active".into(), yesno(client.is_active).into());
-		par.insert("flag_focused".into(), yesno(client.is_focused).into());
-		par.insert("flag_io_active".into(), yesno(client.is_io_active).into());
-		par.insert("flag_overlay".into(), yesno(client.is_overlay).into());
-		par.insert("flag_primary".into(), yesno(client.is_primary).into());
-		par.insert("flag_visible".into(), yesno(client.is_visible).into());
+		let mut par = TemplateParams::new();
+		par.insert("checked", if client.is_primary { "1" } else { "0" });
+		par.insert_rc("name", format!("{} (Client ID: {})", client.name, client.id).into());
+		par.insert("flag_active", yesno(client.is_active));
+		par.insert("flag_focused", yesno(client.is_focused));
+		par.insert("flag_io_active", yesno(client.is_io_active));
+		par.insert("flag_overlay", yesno(client.is_overlay));
+		par.insert("flag_primary", yesno(client.is_primary));
+		par.insert("flag_visible", yesno(client.is_visible));
 
 		let globals = layout.state.globals.clone();
 
@@ -685,10 +676,10 @@ impl SubtabProcessList {
 		let checkbox = state_cell.fetch_component_as::<ComponentCheckbox>("checkbox")?;
 		checkbox.on_toggle({
 			let tasks = tasks.clone();
-			let client_name = client.name.clone();
+			let client_id = client.id;
 			Box::new(move |_common, e| {
 				if e.checked {
-					tasks.push(Task::ProcessListFocusClient(client_name.clone()));
+					tasks.push(Task::ProcessListFocusClient(client_id));
 				}
 				Ok(())
 			})
@@ -703,10 +694,10 @@ impl SubtabProcessList {
 		&mut self,
 		frontend: &mut Frontend<T>,
 		data: &mut T,
-		name: String,
+		client_id: i64,
 		tasks: &Tasks<Task>,
 	) -> anyhow::Result<()> {
-		frontend.interface.monado_client_focus(data, &name)?;
+		frontend.interface.monado_client_focus(data, client_id)?;
 		tasks.push(Task::ProcessListRefresh);
 		Ok(())
 	}

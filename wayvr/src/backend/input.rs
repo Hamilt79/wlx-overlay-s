@@ -1,26 +1,26 @@
 use std::f32::consts::PI;
 use std::process::{Child, Command};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use glam::{Affine3A, Vec2, Vec3A, Vec3Swizzles};
+use glam::{Affine3A, Quat, Vec2, Vec3A, Vec3Swizzles};
 
 use idmap_derive::IntegerId;
 use smallvec::{SmallVec, smallvec};
-use strum::AsRefStr;
+use strum::{AsRefStr, EnumIs};
+use wayvr_ipc::packet_client::{HandsfreeAction, HandsfreeParams};
 use wlx_common::common::LeftRight;
 use wlx_common::windowing::{OverlayWindowState, Positioning};
 
 use crate::backend::task::{InputTask, OverlayTask};
 use crate::overlays::anchor::{ANCHOR_NAME, GRAB_HELP_NAME};
-use crate::overlays::keyboard::KEYBOARD_NAME;
 use crate::overlays::watch::WATCH_NAME;
 use crate::state::{AppSession, AppState};
 use crate::subsystem::hid::WheelDelta;
-use crate::subsystem::input::KeyboardFocus;
+use crate::subsystem::input::InputFocus;
 use crate::windowing::backend::OverlayEventData;
 use crate::windowing::manager::OverlayWindowManager;
-use crate::windowing::window::{self, OverlayWindowData, realign};
+use crate::windowing::window::{self, OverlayCategory, OverlayWindowData, realign, scalar_scale};
 use crate::windowing::{OverlayID, OverlaySelector};
 
 use super::task::TaskType;
@@ -30,6 +30,15 @@ pub struct HoverResult {
     pub haptics: Option<Haptics>,
     /// If true, the laser shows at this position and no further raycasting will be done.
     pub consume: bool,
+}
+
+impl HoverResult {
+    pub fn consume() -> Self {
+        HoverResult {
+            consume: true,
+            ..Default::default()
+        }
+    }
 }
 
 pub struct TrackedDevice {
@@ -48,12 +57,26 @@ pub enum TrackedDeviceRole {
     Tracker,
 }
 
+#[derive(Debug, Eq, PartialEq, Clone, Copy, EnumIs)]
+pub enum FocusPickState {
+    None,
+    /// aiming to pick the focus
+    Aiming,
+    /// picking the focus. this will be consumed on valid on_hover
+    Picking,
+}
+
 pub struct InputState {
     pub hmd: Affine3A,
     pub ipd: f32,
     pub pointers: [Pointer; 2],
     pub devices: Vec<TrackedDevice>,
+    pub handsfree_state: PointerState,
+    pub picking_focus: FocusPickState,
     processes: Vec<Child>,
+    disable_lerp_until: Instant,
+    pub head_yaw_total: f64,
+    head_last_yaw: Option<f64>,
 }
 
 impl InputState {
@@ -64,6 +87,90 @@ impl InputState {
             pointers: [Pointer::new(0), Pointer::new(1)],
             devices: Vec::new(),
             processes: Vec::new(),
+            handsfree_state: PointerState::default(),
+            picking_focus: FocusPickState::None,
+            disable_lerp_until: Instant::now(),
+            head_yaw_total: 0.0,
+            head_last_yaw: None,
+        }
+    }
+
+    pub fn should_disable_lerp(&self) -> bool {
+        self.disable_lerp_until > Instant::now()
+    }
+
+    pub fn stop_picking(&mut self) {
+        if !self.picking_focus.is_none() {
+            self.picking_focus = FocusPickState::None;
+            self.disable_lerp_until = Instant::now() + Duration::from_millis(250);
+        }
+    }
+
+    fn update_head_rot(&mut self) {
+        let orientation = Quat::from_mat3a(&self.hmd.matrix3);
+
+        let qy = orientation.y as f64;
+        let qw = orientation.w as f64;
+
+        if qy * qy + qw * qw < 1e-10 {
+            debug_assert!(false);
+            return;
+        }
+
+        let yaw = 2.0 * qy.atan2(qw);
+        if !yaw.is_finite() {
+            debug_assert!(false);
+            return;
+        }
+
+        let Some(last) = self.head_last_yaw else {
+            self.head_last_yaw = Some(yaw);
+            return;
+        };
+
+        let mut delta = (yaw - last).rem_euclid(std::f64::consts::TAU);
+        if delta > std::f64::consts::PI {
+            delta -= std::f64::consts::TAU;
+        }
+
+        if delta.abs() <= std::f64::consts::PI / 4.0 {
+            self.head_yaw_total -= delta;
+        }
+
+        self.head_last_yaw = Some(yaw);
+    }
+
+    pub fn apply_handsfree_action(&mut self, params: HandsfreeParams) {
+        const fn set_true(v: &mut bool) {
+            *v = true;
+        }
+        const fn set_false(v: &mut bool) {
+            *v = false;
+        }
+        const fn toggle(v: &mut bool) {
+            *v = !*v;
+        }
+
+        let (action, apply) = match params {
+            HandsfreeParams::SetMode(_) => {
+                return;
+            }
+            HandsfreeParams::Press(action) => (action, set_true as fn(&mut bool)),
+            HandsfreeParams::Release(action) => (action, set_false as fn(&mut bool)),
+            HandsfreeParams::Toggle(action) => (action, toggle as fn(&mut bool)),
+            HandsfreeParams::Scroll(val) => {
+                self.handsfree_state.scroll_y = val;
+                return;
+            }
+        };
+
+        match action {
+            HandsfreeAction::Click => apply(&mut self.handsfree_state.click),
+            HandsfreeAction::RightModifier => apply(&mut self.handsfree_state.click_modifier_right),
+            HandsfreeAction::MiddleModifier => {
+                apply(&mut self.handsfree_state.click_modifier_middle);
+            }
+            HandsfreeAction::Grab => apply(&mut self.handsfree_state.grab),
         }
     }
 
@@ -85,6 +192,8 @@ impl InputState {
     }
 
     pub fn post_update(&mut self, session: &AppSession) {
+        self.update_head_rot();
+
         for hand in &mut self.pointers {
             #[cfg(debug_assertions)]
             debug_print_hand(hand);
@@ -125,10 +234,8 @@ impl InputState {
                             hand.interaction.mode = PointerMode::Left;
                         }
                     }
-                    PointerMode::Right => {
-                        if !right_click_orientation {
-                            hand.interaction.mode = PointerMode::Left;
-                        }
+                    PointerMode::Right if !right_click_orientation => {
+                        hand.interaction.mode = PointerMode::Left;
                     }
                     _ => {}
                 }
@@ -162,6 +269,9 @@ fn debug_print_hand(hand: &Pointer) {
             log::debug!("Hand {}: click {}", hand.idx, hand.now.click);
         }
         if hand.now.grab != hand.before.grab {
+            log::debug!("Hand {}: grab {}", hand.idx, hand.now.grab);
+        }
+        if hand.now.grab_float != hand.before.grab_float {
             log::debug!("Hand {}: grab {}", hand.idx, hand.now.grab);
         }
         if hand.now.alt_click != hand.before.alt_click {
@@ -210,6 +320,7 @@ pub struct InteractionState {
     pub hovered_id: Option<OverlayID>,
     pub should_block_input: bool,
     pub should_block_poses: bool,
+    pub kbd_block_activated: bool,
 }
 
 impl Default for InteractionState {
@@ -221,6 +332,7 @@ impl Default for InteractionState {
             hovered_id: None,
             should_block_input: false,
             should_block_poses: false,
+            kbd_block_activated: false,
         }
     }
 }
@@ -264,12 +376,13 @@ impl Pointer {
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct PointerState {
     pub scroll_x: f32,
     pub scroll_y: f32,
     pub click: bool,
     pub grab: bool,
+    pub grab_float: bool,
     pub alt_click: bool,
     pub show_hide: bool,
     pub toggle_dashboard: bool,
@@ -344,7 +457,7 @@ fn populate_lines(
 
         // horizontal arm
         lines.push(PointerLine {
-            mode: PointerMode::Left,
+            mode: hit.mode,
             a: raw_hit.global_pos - (hmd.x_axis * HALF_SIZE),
             b: raw_hit.global_pos + (hmd.x_axis * HALF_SIZE),
         });
@@ -364,12 +477,14 @@ fn populate_lines(
     }
 }
 
-fn update_focus(focus: &mut KeyboardFocus, overlay_keyboard_focus: Option<KeyboardFocus>) {
-    if let Some(f) = &overlay_keyboard_focus
-        && *focus != *f
+fn update_focus(app: &mut AppState, overlay_input_focus: Option<InputFocus>) {
+    if let Some(f) = &overlay_input_focus
+        && app.input_state.picking_focus.is_none()
+        && app
+            .hid_provider
+            .set_input_focus(app.wvr_server.as_mut(), *f)
     {
         log::debug!("Setting keyboard focus to {:?}", *f);
-        *focus = *f;
     }
 }
 
@@ -415,6 +530,9 @@ where
     let pending_haptics = pointer.pending_haptics.take();
 
     if !pointer.tracked {
+        pointer.interaction.should_block_input = false;
+        pointer.interaction.should_block_poses = false;
+        pointer.interaction.kbd_block_activated = false;
         return (None, pending_haptics); // no hit
     }
 
@@ -479,7 +597,8 @@ where
 
         pointer.interaction.should_block_poses = state.block_input
             && app.session.config.block_poses_on_kbd_interaction
-            && hovered.config.name.as_ref() == KEYBOARD_NAME;
+            && hovered.config.category == OverlayCategory::Keyboard
+            && pointer.interaction.kbd_block_activated;
     } else {
         pointer.interaction.should_block_input = false;
         pointer.interaction.should_block_poses = false;
@@ -490,21 +609,22 @@ where
 
     let hovered_state = hovered.config.active_state.as_mut().unwrap();
 
+    let grab_float = pointer.now.grab_float;
+    let grab_start = pointer.now.grab && !pointer.before.grab;
+
     // grab
-    if pointer.now.grab && !pointer.before.grab && hovered_state.grabbable {
-        update_focus(
-            &mut app.hid_provider.keyboard_focus,
-            hovered.config.keyboard_focus,
-        );
-        start_grab(
+    if grab_start && hovered_state.grabbable {
+        update_focus(app, hovered.config.input_focus);
+        start_grab(StartGrabParams {
             idx,
-            hit.overlay,
-            hovered.config.name.clone(),
-            hovered.config.editing,
-            hovered_state,
+            id: hit.overlay,
+            name: hovered.config.name.clone(),
+            editing: hovered.config.editing,
+            state: hovered_state,
             app,
             edit_mode,
-        );
+            grab_float,
+        });
         log::debug!("Hand {}: grabbed {}", hit.pointer, hovered.config.name);
         return (
             Some((hit, raw_hit)),
@@ -522,10 +642,10 @@ where
     let pointer = &mut app.input_state.pointers[hit.pointer];
     if pointer.now.click && !pointer.before.click {
         pointer.interaction.clicked_id = Some(hit.overlay);
-        update_focus(
-            &mut app.hid_provider.keyboard_focus,
-            hovered.config.keyboard_focus,
-        );
+        if hovered.config.category == OverlayCategory::Keyboard {
+            pointer.interaction.kbd_block_activated = true;
+        }
+        update_focus(app, hovered.config.input_focus);
         hovered.config.backend.on_pointer(app, &hit, true);
     } else if !pointer.now.click && pointer.before.click {
         // send release event to overlay that was originally clicked
@@ -561,6 +681,7 @@ fn handle_no_hit<O>(
     let pointer = &mut app.input_state.pointers[pointer_idx];
     pointer.interaction.should_block_input = false;
     pointer.interaction.should_block_poses = false;
+    pointer.interaction.kbd_block_activated = false;
 
     // in case click released while not aiming at anything
     // send release event to overlay that was originally clicked
@@ -586,8 +707,10 @@ fn handle_scroll<O>(hit: &PointerHit, hovered: &mut OverlayWindowData<O>, app: &
     }
 
     let config = &app.session.config;
+    let scroll_factor = 90.0 * app.delta_time;
 
     let scroll_x = pointer.now.scroll_x
+        * scroll_factor
         * config.scroll_speed
         * if config.invert_scroll_direction_x {
             -1.0
@@ -595,6 +718,7 @@ fn handle_scroll<O>(hit: &PointerHit, hovered: &mut OverlayWindowData<O>, app: &
             1.0
         };
     let scroll_y = pointer.now.scroll_y
+        * scroll_factor
         * config.scroll_speed
         * if config.invert_scroll_direction_x {
             -1.0
@@ -645,6 +769,10 @@ where
     O: Default,
 {
     let pointer = &mut app.input_state.pointers[pointer_idx];
+    if !pointer.tracked {
+        return (None, None);
+    }
+
     let ray_origin = pointer.pose;
     let mode = pointer.interaction.mode;
     let edit_mode = overlays.get_edit_mode();
@@ -685,7 +813,7 @@ where
             continue;
         };
 
-        if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 {
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) && !overlay.config.resizing {
             continue;
         }
 
@@ -706,23 +834,31 @@ where
     (None, None)
 }
 
-fn start_grab(
+struct StartGrabParams<'a> {
     idx: usize,
     id: OverlayID,
     name: Arc<str>,
     editing: bool,
-    state: &mut OverlayWindowState,
-    app: &mut AppState,
+    state: &'a mut OverlayWindowState,
+    app: &'a mut AppState,
     edit_mode: bool,
-) {
-    let pointer = &mut app.input_state.pointers[idx];
+    grab_float: bool,
+}
+
+fn start_grab(par: StartGrabParams) {
+    let (app, id, state) = (par.app, par.id, par.state);
+
+    let pointer = &mut app.input_state.pointers[par.idx];
 
     // Grab anchor if:
     // - grabbed overlay is Anchored
     // - not in editmode
+    // - not using grab_float
     // - grabbing with one hand. (grabbing with the 2nd hand will grab the individual overlay instead)
-    let grab_anchor =
-        !edit_mode && !app.anchor_grabbed && matches!(state.positioning, Positioning::Anchored);
+    let grab_anchor = !par.edit_mode
+        && !par.grab_float
+        && !app.anchor_grabbed
+        && matches!(state.positioning, Positioning::Anchored);
 
     let relative_grab_transform = if grab_anchor {
         app.anchor
@@ -740,11 +876,32 @@ fn start_grab(
         grab_anchor,
     });
 
+    app.tasks.enqueue(TaskType::Overlay(OverlayTask::Modify(
+        OverlaySelector::Id(id),
+        Box::new({
+            let pos = state.positioning;
+            let name = par.name.clone();
+            move |app, o| {
+                let _ = o
+                    .backend
+                    .notify(
+                        app,
+                        OverlayEventData::OverlayGrabbed {
+                            name,
+                            pos,
+                            editing: par.editing,
+                        },
+                    )
+                    .inspect_err(|e| log::warn!("Error during Notify OverlayGrabbed: {e:?}"));
+            }
+        }),
+    )));
+
     // Show anchor
     app.tasks.enqueue(TaskType::Overlay(OverlayTask::Modify(
         OverlaySelector::Name(ANCHOR_NAME.clone()),
         Box::new(|app, o| {
-            o.activate(app);
+            o.activate(app, true);
         }),
     )));
 
@@ -758,15 +915,19 @@ fn start_grab(
             Box::new(move |app, o| {
                 let _ = o
                     .backend
-                    .notify(app, OverlayEventData::OverlayGrabbed { name, pos, editing })
+                    .notify(
+                        app,
+                        OverlayEventData::OverlayGrabbed {
+                            name: par.name,
+                            pos,
+                            editing: par.editing,
+                        },
+                    )
                     .inspect_err(|e| log::warn!("Error during Notify OverlayGrabbed: {e:?}"));
 
-                o.default_state.positioning = Positioning::FollowHand {
-                    hand,
-                    lerp: 0.1,
-                    align_to_hmd: true,
-                };
-                o.activate(app);
+                o.default_state.positioning = Positioning::FollowHand { hand, lerp: 0.1 };
+                o.default_state.align_to_hmd = true;
+                o.activate(app, true);
             }),
         )));
     }
@@ -805,16 +966,25 @@ where
             return;
         };
 
+        let scroll_factor = 90.0 * app.delta_time;
+
         if grab_anchor {
             if pointer.now.click {
                 pointer.interaction.mode = PointerMode::Special;
                 let grab_dist = grab_data.offset.translation.length().clamp(0.5, 5.0) * 0.2 + 0.4;
-                handle_scale(&mut app.anchor, pointer.now.scroll_y * grab_dist);
-                handle_scale(&mut grab_data.offset, pointer.now.scroll_y * grab_dist);
+                handle_scale(
+                    &mut app.anchor,
+                    pointer.now.scroll_y * grab_dist * scroll_factor,
+                );
+                handle_scale(
+                    &mut grab_data.offset,
+                    pointer.now.scroll_y * grab_dist * scroll_factor,
+                );
             } else if app.session.config.allow_sliding && pointer.now.scroll_y.is_finite() {
                 // single grab push/pull
                 let grab_dist = grab_data.offset.translation.length().clamp(0.5, 5.0);
-                grab_data.offset.translation.z -= pointer.now.scroll_y * 0.02 * grab_dist;
+                grab_data.offset.translation.z -=
+                    pointer.now.scroll_y * scroll_factor * 0.02 * grab_dist;
                 grab_data.offset.translation.z = grab_data.offset.translation.z.min(-0.05);
             }
             if pointer.now.click_modifier_right {
@@ -822,7 +992,13 @@ where
             } else {
                 app.anchor.translation =
                     pointer.pose.transform_point3a(grab_data.offset.translation);
-                realign(&mut app.anchor, &app.input_state.hmd);
+                let scale = scalar_scale(&app.anchor);
+                realign(
+                    &mut app.anchor,
+                    &app.input_state.hmd,
+                    scale,
+                    app.session.config.snap_angle_deg,
+                );
             }
         } else {
             // single grab resize
@@ -831,21 +1007,31 @@ where
                 let grab_dist = grab_data.offset.translation.length().clamp(0.5, 5.0) * 0.2 + 0.4;
                 handle_scale(
                     &mut overlay_state.transform,
-                    pointer.now.scroll_y * grab_dist,
+                    pointer.now.scroll_y * grab_dist * scroll_factor,
                 );
-                handle_scale(&mut grab_data.offset, pointer.now.scroll_y * grab_dist);
+                handle_scale(
+                    &mut grab_data.offset,
+                    pointer.now.scroll_y * grab_dist * scroll_factor,
+                );
             } else if app.session.config.allow_sliding && pointer.now.scroll_y.is_finite() {
                 // single grab push/pull
                 let grab_dist = grab_data.offset.translation.length().clamp(0.5, 5.0);
-                grab_data.offset.translation.z -= pointer.now.scroll_y * 0.02 * grab_dist;
+                grab_data.offset.translation.z -=
+                    pointer.now.scroll_y * scroll_factor * 0.02 * grab_dist;
                 grab_data.offset.translation.z = grab_data.offset.translation.z.min(-0.05);
             }
             if pointer.now.click_modifier_right {
                 overlay_state.transform = pointer.pose * grab_data.offset;
             } else {
+                let scale = scalar_scale(&overlay_state.transform);
                 overlay_state.transform.translation =
                     pointer.pose.transform_point3a(grab_data.offset.translation);
-                realign(&mut overlay_state.transform, &app.input_state.hmd);
+                realign(
+                    &mut overlay_state.transform,
+                    &app.input_state.hmd,
+                    scale,
+                    app.session.config.snap_angle_deg,
+                );
             }
             overlay.config.pause_movement = true;
             overlay.config.dirty = true;
@@ -860,30 +1046,22 @@ where
             if &*overlay.config.name == WATCH_NAME {
                 // watch special: when dropped, follow the hand that wasn't grabbing
                 if let Some(overlay_state) = overlay.config.active_state.as_mut() {
+                    let align_to_hmd = overlay_state.align_to_hmd;
                     overlay_state.positioning = match overlay_state.positioning {
-                        Positioning::FollowHand {
-                            hand,
-                            lerp,
-                            align_to_hmd,
-                        } => match pointer.hand() {
+                        Positioning::FollowHand { hand, lerp } => match pointer.hand() {
                             Some(LeftRight::Left) => Positioning::FollowHand {
                                 hand: LeftRight::Right,
                                 lerp,
-                                align_to_hmd,
                             },
                             Some(LeftRight::Right) => Positioning::FollowHand {
                                 hand: LeftRight::Left,
                                 lerp,
-                                align_to_hmd,
                             },
-                            _ => Positioning::FollowHand {
-                                hand,
-                                lerp,
-                                align_to_hmd,
-                            },
+                            _ => Positioning::FollowHand { hand, lerp },
                         },
                         x => x,
                     };
+                    overlay_state.align_to_hmd = align_to_hmd;
                 }
             } else if overlay.config.global
                 && let Some(active_state) = overlay.config.active_state.as_ref()

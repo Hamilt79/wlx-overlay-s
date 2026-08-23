@@ -11,47 +11,50 @@ use wayvr_ipc::{
     client::WayVRClient,
     ipc,
     packet_client::{self, PositionMode},
+    packet_server::{WvrProcessHandle, WvrWindowHandle},
 };
 
 use crate::helper::{
-    WayVRClientState, wlx_device_haptics, wlx_input_state, wlx_panel_modify, wlx_show_hide,
-    wlx_switch_set, wvr_process_get, wvr_process_launch, wvr_process_list, wvr_process_terminate,
-    wvr_window_list, wvr_window_set_visible,
+    WayVRClientState, wlr_input_capture, wlx_device_haptics, wlx_handsfree, wlx_input_state,
+    wlx_panel_modify, wlx_show_hide, wlx_switch_set, wvr_process_get, wvr_process_launch,
+    wvr_process_list, wvr_process_terminate, wvr_window_list, wvr_window_set_visible,
 };
 
 mod helper;
+mod types;
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     env_logger::init_from_env(Env::default().default_filter_or("info"));
     let args = Args::parse();
 
-    let mut state = WayVRClientState {
-        wayvr_client: WayVRClient::new(&format!("wayvrctl-{}", process::id()))
-            .await
-            .inspect_err(|e| {
-                log::error!("Failed to initialize WayVR connection: {e:?}");
-                process::exit(1);
-            })
-            .unwrap(),
-        serial_generator: ipc::SerialGenerator::new(),
-        pretty_print: args.pretty,
-    };
+    smol::block_on(async move {
+        let mut state = WayVRClientState {
+            wayvr_client: WayVRClient::new(&format!("wayvrctl-{}", process::id()))
+                .await
+                .inspect_err(|e| {
+                    log::error!("Failed to initialize WayVR connection: {e:?}");
+                    process::exit(1);
+                })
+                .unwrap(),
+            serial_generator: ipc::SerialGenerator::new(),
+            pretty_print: args.pretty,
+        };
 
-    let maybe_err = if let Subcommands::Batch { fail_fast } = args.command {
-        run_batch(&mut state, fail_fast).await
-    } else {
-        run_once(&mut state, args).await
-    };
+        let maybe_err = if let Subcommands::Batch { fail_fast } = args.command {
+            run_batch(&mut state, fail_fast).await
+        } else {
+            run_once(&mut state, args).await
+        };
 
-    if let Err(e) = maybe_err {
-        log::error!("{e:?}");
-        return ExitCode::FAILURE;
-    } else {
-        std::thread::sleep(Duration::from_millis(20));
-    }
+        if let Err(e) = maybe_err {
+            log::error!("{e:?}");
+            return ExitCode::FAILURE;
+        } else {
+            std::thread::sleep(Duration::from_millis(20));
+        }
 
-    ExitCode::SUCCESS
+        ExitCode::SUCCESS
+    })
 }
 
 async fn run_batch(state: &mut WayVRClientState, fail_fast: bool) -> anyhow::Result<()> {
@@ -105,11 +108,13 @@ async fn run_once(state: &mut WayVRClientState, args: Args) -> anyhow::Result<()
             handle,
             visible_0_or_1,
         } => {
-            let handle = serde_json::from_str(&handle).context("Invalid handle")?;
+            let handle =
+                serde_json::from_str::<WvrWindowHandle>(&handle).context("Invalid handle")?;
             wvr_window_set_visible(state, handle, visible_0_or_1 != 0).await;
         }
         Subcommands::ProcessGet { handle } => {
-            let handle = serde_json::from_str(&handle).context("Invalid handle")?;
+            let handle =
+                serde_json::from_str::<WvrProcessHandle>(&handle).context("Invalid handle")?;
             wvr_process_get(state, handle).await;
         }
         Subcommands::ProcessList => {
@@ -194,6 +199,12 @@ async fn run_once(state: &mut WayVRClientState, args: Args) -> anyhow::Result<()
         Subcommands::SwitchSet { set_or_0: set } => {
             let set = if set == 0 { None } else { Some((set - 1) as _) };
             wlx_switch_set(state, set).await;
+        }
+        Subcommands::Handsfree { command } => {
+            wlx_handsfree(state, command.into()).await;
+        }
+        Subcommands::InputCapture { command } => {
+            wlr_input_capture(state, matches!(command, GrabRelease::Grab)).await;
         }
     }
     Ok(())
@@ -291,6 +302,20 @@ enum Subcommands {
         /// Set number to switch to, 0 to hide all sets
         set_or_0: usize,
     },
+    Handsfree {
+        /// Command to execute
+        #[command(subcommand)]
+        command: SubcommandHandsfree,
+    },
+    InputCapture {
+        command: GrabRelease,
+    },
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum GrabRelease {
+    Grab,
+    Release,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -298,6 +323,47 @@ enum PosModeEnum {
     Floating,
     Anchored,
     Static,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum HandsfreeMode {
+    /// No handsfree pointer control
+    None,
+    /// Pointer controlled by HMD
+    Hmd,
+    /// Pointer controlled by HMD. Left pinch click, right pinch grab.
+    HmdPinch,
+    /// Pointer controlled by eye gaze
+    EyeTracking,
+    /// Pointer controlled eye gaze. Left pinch click, right pinch grab.
+    EyeTrackingPinch,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum HandsfreeAction {
+    /// The click action
+    Click,
+    /// The grab action
+    Grab,
+    /// Right-click modifier (use with click)
+    RightModifier,
+    /// Middle-click modifier (use with click)
+    MiddleModifier,
+}
+
+#[derive(clap::Parser, Debug)]
+#[allow(clippy::enum_variant_names)]
+pub enum SubcommandHandsfree {
+    /// Set the handsfree mode
+    SetMode { mode: HandsfreeMode },
+    /// Press and hold an action
+    Press { action: HandsfreeAction },
+    /// Release a held action
+    Release { action: HandsfreeAction },
+    /// Toggle the state of an action
+    Toggle { action: HandsfreeAction },
+    /// Emulate a joystick scroll
+    Scroll { amount: f32 },
 }
 
 #[derive(clap::Parser, Debug)]

@@ -23,6 +23,7 @@ use super::{
     swapchain::{WlxSwapchain, create_swapchain},
 };
 
+#[allow(clippy::struct_field_names)]
 pub(super) struct Skybox {
     view: Option<Arc<ImageView>>,
     sky: Option<WlxSwapchain>,
@@ -126,8 +127,7 @@ impl Skybox {
         let extent = self
             .view
             .as_ref()
-            .map(|v| v.extent_u32arr())
-            .unwrap_or([4096, 4096]);
+            .map_or([4096, 4096], ExtentExt::extent_u32arr);
 
         let mut swapchain = create_swapchain(xr, app.gfx.clone(), extent, 1, opts)?;
         let tgt = swapchain

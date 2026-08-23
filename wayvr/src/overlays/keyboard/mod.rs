@@ -2,22 +2,24 @@ use std::{
     cell::Cell,
     collections::HashMap,
     process::{Child, Command},
-    sync::atomic::Ordering,
+    sync::{Arc, atomic::Ordering},
 };
 
+use crate::overlays::toast::Toast;
 use crate::{
     KEYMAP_CHANGE,
     backend::{
         input::{HoverResult, PointerHit},
-        task::{OverlayTask, TaskType},
+        task::{GlobalChange, OverlayTask, TaskType},
     },
+    config::none_if_0,
     gui::panel::{GuiPanel, overlay_list::OverlayList, set_list::SetList},
     overlays::keyboard::builder::create_keyboard_panel,
     state::AppState,
     subsystem::{
         dbus::DbusConnector,
         hid::{
-            ALT, CTRL, KeyModifier, META, SHIFT, SUPER, VirtualKey, WheelDelta, XkbKeymap,
+            ALT, ALTGR, CTRL, KeyModifier, SHIFT, SUPER, VirtualKey, WheelDelta, XkbKeymap,
             get_keymap_wl, get_keymap_x11,
         },
     },
@@ -30,64 +32,34 @@ use anyhow::Context;
 use glam::{Affine3A, Quat, Vec3, vec3};
 use regex::Regex;
 use slotmap::{SlotMap, new_key_type};
+use smallvec::SmallVec;
 use wgui::{
-    drawing,
+    color::WguiColor,
     event::{InternalStateChangeEvent, MouseButtonEvent, MouseButtonIndex},
+    i18n::Translation,
+    layout::WidgetID,
 };
 use wlx_common::windowing::{OverlayWindowState, Positioning};
 use wlx_common::{
     config::AltModifier,
-    overlays::{BackendAttrib, BackendAttribValue},
+    overlays::{BackendAttrib, BackendAttribValue, ToastTopic},
 };
 
 pub mod builder;
 mod layout;
 
 pub const KEYBOARD_NAME: &str = "kbd";
-const AUTO_RELEASE_MODS: [KeyModifier; 5] = [SHIFT, CTRL, ALT, SUPER, META];
+const AUTO_RELEASE_MODS: [KeyModifier; 5] = [SHIFT, CTRL, ALT, SUPER, ALTGR];
 const SYSTEM_LAYOUT_ALIASES: [&str; 5] = ["mozc", "pinyin", "hangul", "sayura", "unikey"];
 
-pub fn create_keyboard(app: &mut AppState, wayland: bool) -> anyhow::Result<OverlayWindowConfig> {
+pub fn create_keyboard(app: &mut AppState) -> anyhow::Result<OverlayWindowConfig> {
     let layout = layout::Layout::load_from_disk();
-    let default_state = KeyboardState {
-        modifiers: 0,
-        alt_modifier: alt_modifier_to_key(app.session.config.keyboard_middle_click_mode),
-        processes: vec![],
-        overlay_list: OverlayList::default(),
-        set_list: SetList::default(),
-        clock_12h: app.session.config.clock_12h,
-    };
 
     let auto_labels = layout.auto_labels.unwrap_or(true);
 
     let width = layout.row_size * 0.05 * app.session.config.keyboard_scale;
 
-    let mut backend = KeyboardBackend {
-        layout_panels: SlotMap::default(),
-        layout_ids: HashMap::default(),
-        active_layout: KeyboardPanelKey::default(),
-        default_state,
-        wlx_layout: layout,
-        wayland,
-        re_fcitx: Regex::new(r"^keyboard-([^-]+)(?:-([^-]+))?$").unwrap(),
-    };
-
-    let mut maybe_keymap = backend
-        .get_effective_keymap()
-        .inspect_err(|e| log::warn!("{e:?}"))
-        .or_else(|_| {
-            if let Some(layout_variant) = app.session.config.default_keymap.as_ref() {
-                let mut splat = layout_variant.split('-');
-                XkbKeymap::from_layout_variant(
-                    splat.next().unwrap_or(""),
-                    splat.next().unwrap_or(""),
-                )
-                .context("invalid value for default_keymap")
-            } else {
-                anyhow::bail!("no default_keymap set")
-            }
-        })
-        .ok();
+    let mut maybe_keymap = KeyboardBackend::get_initial_keymap(app).ok();
 
     if let Some(keymap) = maybe_keymap.as_ref() {
         app.hid_provider
@@ -98,6 +70,29 @@ pub fn create_keyboard(app: &mut AppState, wayland: bool) -> anyhow::Result<Over
         maybe_keymap = None;
     }
 
+    let default_state = KeyboardState {
+        modifiers: 0,
+        alt_modifier: alt_modifier_to_key(app.session.config.keyboard_middle_click_mode),
+        processes: vec![],
+        overlay_list: OverlayList::default(),
+        set_list: SetList::default(),
+        clock_12h: app.session.config.clock_12h,
+        keymap_switch_layouts: app.session.config.keyboard_layouts.clone(),
+        keymap_switch_index: 0,
+        keymap_switch_pending: false,
+    };
+
+    let mut backend = KeyboardBackend {
+        layout_panels: SlotMap::default(),
+        layout_ids: HashMap::default(),
+        active_layout: KeyboardPanelKey::default(),
+        default_state,
+        wlx_layout: layout,
+        wayland: app.feats.desktop_backend.is_wayland(),
+        re_fcitx: Regex::new(r"^keyboard-([^-]+)(?:-([^-]+))?$").unwrap(),
+        re_keymap: Regex::new(r"^([a-zA-Z][a-zA-Z0-9]*)(?:\(([^)]+)\))?$").unwrap(),
+    };
+
     backend.active_layout = backend.add_new_keymap(maybe_keymap.as_ref(), app)?;
 
     Ok(OverlayWindowConfig {
@@ -107,7 +102,8 @@ pub fn create_keyboard(app: &mut AppState, wayland: bool) -> anyhow::Result<Over
             grabbable: true,
             positioning: Positioning::Anchored,
             interactable: true,
-            curvature: Some(0.15),
+            curvature: none_if_0(app.session.config.default_curvature),
+            alpha: app.session.config.default_opacity,
             transform: Affine3A::from_scale_rotation_translation(
                 Vec3::ONE * width,
                 Quat::from_rotation_x(-10f32.to_radians()),
@@ -125,7 +121,7 @@ const fn alt_modifier_to_key(m: AltModifier) -> KeyModifier {
         AltModifier::Ctrl => CTRL,
         AltModifier::Alt => ALT,
         AltModifier::Super => SUPER,
-        AltModifier::Meta => META,
+        AltModifier::AltGr => ALTGR,
         _ => 0,
     }
 }
@@ -142,6 +138,7 @@ struct KeyboardBackend {
     wlx_layout: layout::Layout,
     wayland: bool,
     re_fcitx: Regex,
+    re_keymap: Regex,
 }
 
 impl KeyboardBackend {
@@ -182,7 +179,9 @@ impl KeyboardBackend {
             self.internal_switch_keymap(new_key);
         }
         app.tasks
-            .enqueue(TaskType::Overlay(OverlayTask::KeyboardChanged));
+            .enqueue(TaskType::Overlay(OverlayTask::GlobalChange(
+                GlobalChange::Keyboard,
+            )));
         Ok(true)
     }
 
@@ -233,6 +232,55 @@ impl KeyboardBackend {
         }
     }
 
+    fn switch_keymap_by_name(
+        &mut self,
+        keymap_name: &str,
+        app: &mut AppState,
+    ) -> anyhow::Result<bool> {
+        let Some(captures) = self.re_keymap.captures(keymap_name) else {
+            anyhow::bail!("invalid layout name for keymap switch: {keymap_name}");
+        };
+        let layout = captures.get(1).map_or("", |g| g.as_str());
+        let variant = captures.get(2).map_or("", |g| g.as_str());
+        let keymap = XkbKeymap::from_layout_variant(layout, variant)
+            .context("invalid layout/variant for keymap switch")?;
+        app.hid_provider
+            .keymap_changed(app.wvr_server.as_mut(), &keymap);
+        self.switch_keymap(&keymap, app)
+    }
+
+    fn get_initial_keymap(app: &AppState) -> anyhow::Result<XkbKeymap> {
+        fn get_system_keymap(wayland: bool) -> anyhow::Result<XkbKeymap> {
+            if wayland {
+                get_keymap_wl()
+            } else {
+                get_keymap_x11()
+            }
+        }
+
+        let Ok(fcitx_layout) = DbusConnector::fcitx_keymap()
+            .context("Could not keymap via fcitx5, falling back to wayland")
+            .inspect_err(|e| log::info!("{e:?}"))
+        else {
+            return get_system_keymap(app.feats.desktop_backend.is_wayland());
+        };
+
+        let re = Regex::new(r"^keyboard-([^-]+)(?:-([^-]+))?$").unwrap();
+        if let Some(captures) = re.captures(&fcitx_layout) {
+            XkbKeymap::from_layout_variant(
+                captures.get(1).map_or("", |g| g.as_str()),
+                captures.get(2).map_or("", |g| g.as_str()),
+            )
+            .context("layout/variant is invalid")
+        } else if SYSTEM_LAYOUT_ALIASES.contains(&fcitx_layout.as_str()) {
+            log::debug!("{fcitx_layout} is an IME, switching to system layout.");
+            get_system_keymap(app.feats.desktop_backend.is_wayland())
+        } else {
+            log::warn!("Unknown layout or IME '{fcitx_layout}', using system layout");
+            get_system_keymap(app.feats.desktop_backend.is_wayland())
+        }
+    }
+
     fn auto_switch_keymap(&mut self, app: &mut AppState) -> anyhow::Result<bool> {
         let keymap = self.get_effective_keymap()?;
         app.hid_provider
@@ -266,6 +314,27 @@ impl OverlayBackend for KeyboardBackend {
                 });
             }
         }
+
+        if self.panel().state.keymap_switch_pending {
+            self.panel().state.keymap_switch_pending = false;
+            let layouts = self.panel().state.keymap_switch_layouts.clone();
+            let index = self.panel().state.keymap_switch_index;
+            if self
+                .switch_keymap_by_name(&layouts[index], app)
+                .inspect_err(|e| log::warn!("{e:?}"))
+                .unwrap_or(false)
+            {
+                let panel = self.panel();
+                if !panel.initialized {
+                    panel.init(app)?;
+                }
+                return Ok(match panel.should_render(app)? {
+                    ShouldRender::Should | ShouldRender::Can => ShouldRender::Should,
+                    ShouldRender::Unable => ShouldRender::Unable,
+                });
+            }
+        }
+
         self.panel().should_render(app)
     }
     fn render(&mut self, app: &mut AppState, rdr: &mut RenderResources) -> anyhow::Result<()> {
@@ -327,6 +396,9 @@ struct KeyboardState {
     overlay_list: OverlayList,
     set_list: SetList,
     clock_12h: bool,
+    keymap_switch_layouts: Vec<Arc<str>>,
+    keymap_switch_index: usize,
+    keymap_switch_pending: bool,
 }
 
 macro_rules! take_and_leave_default {
@@ -346,6 +418,9 @@ impl KeyboardState {
             overlay_list: OverlayList::default(),
             set_list: SetList::default(),
             clock_12h: self.clock_12h,
+            keymap_switch_layouts: std::mem::take(&mut self.keymap_switch_layouts),
+            keymap_switch_index: self.keymap_switch_index,
+            keymap_switch_pending: false,
         }
     }
 }
@@ -355,14 +430,21 @@ fn play_key_click(app: &mut AppState) {
         .play_sample(&mut app.audio_system, "key_click");
 }
 
+struct ChildWidget {
+    id: WidgetID,
+    base_color: WguiColor,
+}
+
 struct KeyState {
     button_state: KeyButtonData,
-    color: drawing::Color,
-    color2: drawing::Color,
-    base_border_color: drawing::Color,
-    cur_border_color: Cell<drawing::Color>,
+    color: WguiColor,
+    color2: WguiColor,
+    base_border_color: WguiColor,
+    cur_border_color: Cell<WguiColor>,
     border: f32,
     drawn_state: Cell<bool>,
+    labels: SmallVec<[ChildWidget; 3]>,
+    sprites: SmallVec<[ChildWidget; 1]>,
 }
 
 #[derive(Debug)]
@@ -383,6 +465,9 @@ enum KeyButtonData {
         args: Vec<String>,
         release_program: Option<String>,
         release_args: Vec<String>,
+    },
+    KeymapSwitch {
+        layouts: Vec<Arc<str>>,
     },
 }
 
@@ -430,6 +515,23 @@ fn handle_press(
             if let Ok(child) = Command::new(program).args(args).spawn() {
                 keyboard.processes.push(child);
             }
+            play_key_click(app);
+        }
+        KeyButtonData::KeymapSwitch { layouts } => {
+            if layouts.is_empty() {
+                Toast::new(
+                    ToastTopic::System,
+                    Some(Translation::from_translation_key(
+                        "TOAST.NO_KEYMAPS_CONFIGURED",
+                    )),
+                    Translation::from_translation_key("TOAST.NO_KEYMAPS_CONFIGURED_HELP"),
+                )
+                .with_timeout(5.)
+                .submit(app);
+                return;
+            }
+            keyboard.keymap_switch_index = (keyboard.keymap_switch_index + 1) % layouts.len();
+            keyboard.keymap_switch_pending = true;
             play_key_click(app);
         }
     }

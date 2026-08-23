@@ -1,31 +1,40 @@
 use crate::{
-	assets::AssetPath,
+	assets::AssetPathRc,
+	color::WguiColor,
 	components::{
-		Component, ComponentBase, ComponentTrait, RefreshData,
+		Component, ComponentBase, ComponentTrait, DestroyData, RefreshData,
 		button::{self, ComponentButton},
 	},
 	event::CallbackDataCommon,
 	i18n::Translation,
 	layout::WidgetPair,
-	widget::{ConstructEssentials, div::WidgetDiv},
+	widget::{ConstructEssentials, div::WidgetDiv, util::WLength},
 };
-use std::{cell::RefCell, fmt::Pointer, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 use taffy::{
 	AlignItems,
 	prelude::{length, percent},
 };
 
-pub struct Entry<'a> {
-	pub sprite_src: Option<AssetPath<'a>>,
+pub struct Entry {
+	pub sprite_src: Option<AssetPathRc>,
 	pub text: Translation,
-	pub name: &'a str,
+	pub name: Rc<str>,
 }
 
 pub struct Params<'a> {
 	pub style: taffy::Style,
-	pub entries: Vec<Entry<'a>>,
+	pub entries: Vec<Entry>,
 	pub selected_entry_name: &'a str, // default: ""
 	pub on_select: Option<TabSelectCallback>,
+	pub round: WLength,
+	pub color: Option<WguiColor>,
+	pub border: f32,
+	pub border_color: Option<WguiColor>,
+	pub hover_color: Option<WguiColor>,
+	pub hover_border_color: Option<WguiColor>,
+	pub sticky_color: Option<WguiColor>,
+	pub sticky_border_color: Option<WguiColor>,
 }
 
 struct MountedEntry {
@@ -62,21 +71,19 @@ impl ComponentTrait for ComponentTabs {
 	fn refresh(&self, _data: &mut RefreshData) {
 		// nothing to do
 	}
+
+	fn destroy(&self, data: &mut DestroyData) {
+		for e in self.state.borrow_mut().mounted_entries.drain(..) {
+			e.button.destroy(data);
+			data.destroy_widgets.push(e.button.base().id);
+		}
+	}
 }
 
 impl State {
 	fn select_entry(&mut self, common: &mut CallbackDataCommon, name: &Rc<str>) {
-		let (color_accent, color_button) = {
-			let theme = &common.state.theme;
-			(theme.accent_color, theme.button_color)
-		};
-
 		for entry in &self.mounted_entries {
-			if *entry.name == **name {
-				entry.button.set_color(common, color_accent);
-			} else {
-				entry.button.set_color(common, color_button);
-			}
+			entry.button.set_sticky_state(common, *entry.name == **name);
 		}
 		self.selected_entry_name = name.clone();
 
@@ -113,15 +120,17 @@ pub fn construct(ess: &mut ConstructEssentials, params: Params) -> anyhow::Resul
 	style.overflow.y = taffy::Overflow::Scroll;
 	style.flex_direction = taffy::FlexDirection::Column;
 	style.flex_wrap = taffy::FlexWrap::NoWrap;
-	style.align_items = Some(AlignItems::Center);
-	style.gap = length(4.0);
+	style.align_items = Some(AlignItems::CENTER);
+	style.gap = length(4.0_f32);
 
 	let (root, _) = ess.layout.add_child(ess.parent, WidgetDiv::create(), style)?;
 
 	let mut mounted_entries = Vec::<MountedEntry>::new();
 
 	// Mount entries
-	for entry in params.entries {
+	for (idx, entry) in params.entries.into_iter().enumerate() {
+		let sprite_src = entry.sprite_src.as_ref().map(AssetPathRc::as_borrowed);
+
 		let (_, button) = button::construct(
 			&mut ConstructEssentials {
 				layout: ess.layout,
@@ -129,21 +138,32 @@ pub fn construct(ess: &mut ConstructEssentials, params: Params) -> anyhow::Resul
 			},
 			button::Params {
 				text: Some(entry.text),
-				sprite_src: entry.sprite_src,
+				sprite_src,
 				style: taffy::Style {
 					min_size: taffy::Size {
-						width: percent(1.0),
-						height: length(32.0),
+						width: percent(1.0_f32),
+						height: length(32.0_f32),
 					},
-					justify_content: Some(taffy::JustifyContent::Start),
+					justify_content: Some(taffy::JustifyContent::START),
 					..Default::default()
 				},
+				round: params.round,
+				color: params.color,
+				border: params.border,
+				border_color: params.border_color,
+				hover_color: params.hover_color,
+				hover_border_color: params.hover_border_color,
+				sticky_color: params.sticky_color,
+				sticky_border_color: params.sticky_border_color,
 				..Default::default()
 			},
 		)?;
 
+		// init colors
+		button.set_sticky_state(&mut ess.layout.common(), idx == 0);
+
 		mounted_entries.push(MountedEntry {
-			name: Rc::from(entry.name),
+			name: entry.name,
 			button,
 		});
 	}

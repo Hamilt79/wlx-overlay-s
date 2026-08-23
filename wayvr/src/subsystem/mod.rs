@@ -3,6 +3,12 @@ pub mod hid;
 pub mod input;
 pub mod notifications;
 
+#[cfg(feature = "whisper")]
+pub mod clipboard;
+
+#[cfg(feature = "whisper")]
+pub mod whisper_stt;
+
 #[cfg(feature = "osc")]
 pub mod osc;
 

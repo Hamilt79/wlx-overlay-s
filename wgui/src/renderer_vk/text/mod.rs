@@ -11,7 +11,11 @@ use etagere::AllocId;
 use glam::Mat4;
 use parking_lot::Mutex;
 
-use crate::drawing::{self};
+use crate::{
+	color::{WguiColor, WguiColorName},
+	drawing::{self},
+	palette::WguiColorPalette,
+};
 
 pub static SWASH_CACHE: LazyLock<Mutex<SwashCache>> = LazyLock::new(|| Mutex::new(SwashCache::new()));
 
@@ -41,24 +45,51 @@ impl Default for TextShadow {
 	}
 }
 
+#[derive(Debug, Clone)]
+pub struct WguiTextShadow {
+	pub y: f32,
+	pub x: f32,
+	pub color: WguiColor,
+}
+
+impl WguiTextShadow {
+	pub fn to_text_shadow(&self, palette: &WguiColorPalette) -> TextShadow {
+		TextShadow {
+			x: self.x,
+			y: self.y,
+			color: self.color.resolve(palette),
+		}
+	}
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct TextStyle {
 	pub size: Option<f32>,
 	pub line_height: Option<f32>,
-	pub color: Option<drawing::Color>,
+	pub color: Option<WguiColor>,
 	pub style: Option<FontStyle>,
 	pub weight: Option<FontWeight>,
 	pub align: Option<HorizontalAlign>,
 	pub wrap: bool,
-	pub shadow: Option<TextShadow>,
+	pub shadow: Option<WguiTextShadow>,
 }
 
-impl From<&TextStyle> for Attrs<'_> {
-	fn from(style: &TextStyle) -> Self {
+impl Default for WguiTextShadow {
+	fn default() -> Self {
+		Self {
+			y: 1.5,
+			x: 1.5,
+			color: WguiColorName::Shadow.into(),
+		}
+	}
+}
+
+impl TextStyle {
+	pub fn to_attrs(&self, palette: &WguiColorPalette) -> Attrs<'_> {
 		Attrs::new()
-			.color(style.color.unwrap_or_default().into())
-			.style(style.style.unwrap_or_default().into())
-			.weight(style.weight.unwrap_or_default().into())
+			.color(self.color.unwrap_or_default().resolve(palette).into())
+			.style(self.style.unwrap_or_default().into())
+			.weight(self.weight.unwrap_or_default().into())
 	}
 }
 

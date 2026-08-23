@@ -1,84 +1,111 @@
 use anyhow::Context;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::{BufferType, buffer_type};
-use smithay::desktop::{PopupKind, PopupManager};
+use smithay::desktop::{
+    PopupKeyboardGrab, PopupKind, PopupManager, PopupPointerGrab, PopupUngrabStrategy,
+    find_popup_root_surface, get_popup_toplevel_coords,
+};
+use smithay::input::pointer::{CursorImageStatus, Focus};
 use smithay::input::{Seat, SeatHandler, SeatState};
+use smithay::output::Output;
 use smithay::reexports::rustix::fs::{OFlags, fcntl_setfl};
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration;
 use smithay::reexports::wayland_server::Resource;
-use smithay::reexports::wayland_server::protocol::{wl_buffer, wl_output, wl_seat};
+use smithay::reexports::wayland_server::backend::ObjectId;
+use smithay::reexports::wayland_server::protocol::{wl_buffer, wl_callback, wl_output, wl_seat};
 use smithay::reexports::wayland_server::{self, DisplayHandle};
+use smithay::utils::{Logical, Rectangle, Serial, Size};
 use smithay::wayland::buffer::BufferHandler;
+use smithay::wayland::compositor::{self, BufferAssignment, SurfaceAttributes, send_surface_state};
 use smithay::wayland::dmabuf::{
     DmabufFeedback, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier, get_dmabuf,
 };
 use smithay::wayland::fractional_scale::with_fractional_scale;
 use smithay::wayland::output::OutputHandler;
+use smithay::wayland::relative_pointer::RelativePointerManagerState;
+use smithay::wayland::selection::data_device::{
+    ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
+    set_data_device_focus, set_data_device_selection,
+};
+use smithay::wayland::selection::{self, SelectionHandler};
 use smithay::wayland::selection::{
     ext_data_control as selection_ext,
     primary_selection::{PrimarySelectionHandler, PrimarySelectionState, set_primary_focus},
     wlr_data_control as selection_wlr,
 };
 use smithay::wayland::shell::kde::decoration::{KdeDecorationHandler, KdeDecorationState};
-use smithay::wayland::shell::xdg::decoration::XdgDecorationHandler;
+use smithay::wayland::shell::xdg::decoration::{XdgDecorationHandler, XdgDecorationState};
+use smithay::wayland::shell::xdg::{
+    PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
+};
 use smithay::wayland::shm::{ShmHandler, ShmState, with_buffer_contents};
 use smithay::wayland::single_pixel_buffer::get_single_pixel_buffer;
+use smithay::wayland::viewporter::ViewporterState;
 use smithay::{
     delegate_compositor, delegate_data_control, delegate_data_device, delegate_dmabuf,
     delegate_ext_data_control, delegate_kde_decoration, delegate_output,
-    delegate_primary_selection, delegate_seat, delegate_shm, delegate_single_pixel_buffer,
-    delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_primary_selection, delegate_relative_pointer, delegate_seat, delegate_shm,
+    delegate_single_pixel_buffer, delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::OwnedFd;
 use std::sync::{Arc, Mutex};
-
-use smithay::utils::Serial;
-use smithay::wayland::compositor::{self, BufferAssignment, SurfaceAttributes, send_surface_state};
-
-use smithay::wayland::selection::data_device::{
-    ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
-    set_data_device_focus,
-};
-use smithay::wayland::selection::{self, SelectionHandler};
-use smithay::wayland::shell::xdg::{
-    PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
-};
 use wayland_server::Client;
 use wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use wayland_server::protocol::wl_surface::WlSurface;
 
 use crate::backend::wayvr::image_importer::ImageImporter;
-use crate::backend::wayvr::{SurfaceBufWithImage, time};
+use crate::backend::wayvr::{SurfaceBufWithImage, WAYVR_SCREEN_RES, time};
+use crate::graphics::ExtentExt;
 use crate::ipc::event_queue::SyncEventQueue;
 
 use super::WayVRTask;
 
 pub struct Application {
+    pub output: Output,
     pub image_importer: ImageImporter,
     pub dmabuf_state: (DmabufState, DmabufGlobal, Option<DmabufFeedback>),
     pub compositor: compositor::CompositorState,
     pub xdg_shell: XdgShellState,
+    pub seat: Seat<Application>,
     pub seat_state: SeatState<Application>,
     pub shm: ShmState,
     pub data_device: DataDeviceState,
     pub primary_selection_state: PrimarySelectionState,
     pub ext_data_control_state: selection_ext::DataControlState,
     pub wlr_data_control_state: selection_wlr::DataControlState,
+    #[allow(dead_code)]
+    pub xdg_decoration_state: XdgDecorationState,
     pub kde_decoration_state: KdeDecorationState,
+    #[allow(dead_code)]
+    pub relative_pointer_state: RelativePointerManagerState,
     pub wayvr_tasks: SyncEventQueue<WayVRTask>,
-    pub redraw_requests: HashSet<wayland_server::backend::ObjectId>,
     pub popup_manager: PopupManager,
+    #[allow(dead_code)]
+    pub viewporter: ViewporterState,
     pub display_handle: DisplayHandle,
+    pub redraw_requests: HashSet<ObjectId>,
+    pub pending_frame_callbacks: HashMap<ObjectId, Vec<wl_callback::WlCallback>>,
+    pub cursor_image: CursorImageStatus,
 }
 
 impl Application {
     pub fn cleanup(&mut self) {
         self.image_importer.cleanup();
+        self.output.cleanup();
+    }
+
+    pub fn set_clipboard_text(&mut self, content: &str) {
+        let mime_types = vec![
+            "text/plain;charset=utf-8".to_string(),
+            "text/plain".to_string(),
+        ];
+        let user_data = Arc::from(content.as_bytes());
+        set_data_device_selection(&self.display_handle, &self.seat, mime_types, user_data);
     }
 
     fn popups_commit(&mut self, surface: &WlSurface) {
@@ -108,6 +135,82 @@ impl Application {
             }
         }
     }
+
+    fn send_initial_surface_state(&self, surface: &WlSurface) {
+        self.output.enter(surface);
+
+        smithay::wayland::compositor::with_states(surface, |states| {
+            send_surface_state(surface, states, 1, smithay::utils::Transform::Normal);
+
+            with_fractional_scale(states, |fractional| {
+                fractional.set_preferred_scale(1.0);
+            });
+        });
+    }
+
+    pub fn send_frame_callbacks_for_surface_id(&mut self, surface_id: &ObjectId) {
+        let Some(callbacks) = self.pending_frame_callbacks.remove(surface_id) else {
+            return;
+        };
+
+        let t = time::get_millis() as u32;
+        for cb in callbacks {
+            cb.done(t);
+        }
+    }
+
+    pub fn has_pending_frame_callbacks(
+        &self,
+        surface_id: &wayland_server::backend::ObjectId,
+    ) -> bool {
+        self.pending_frame_callbacks
+            .get(surface_id)
+            .is_some_and(|v| !v.is_empty())
+    }
+
+    pub fn take_redraw_request(&mut self, surface_id: &ObjectId) -> bool {
+        self.redraw_requests.remove(surface_id)
+    }
+
+    pub fn output_logical_size(&self) -> Size<i32, Logical> {
+        self.output.current_mode().map_or_else(
+            || Size::new(WAYVR_SCREEN_RES[0], WAYVR_SCREEN_RES[1]),
+            |mode| Size::new(mode.size.w, mode.size.h),
+        )
+    }
+
+    fn surface_logical_size(surface: &WlSurface) -> Option<Size<i32, Logical>> {
+        smithay::wayland::compositor::with_states(surface, |states| {
+            SurfaceBufWithImage::get_from_surface(states).map(|buf| {
+                let extent = buf.image.extent_u32arr();
+                let scale = buf.scale.max(1) as u32;
+
+                Size::new((extent[0] / scale) as i32, (extent[1] / scale) as i32)
+            })
+        })
+    }
+
+    fn constrain_popup(&self, popup: &PopupSurface) {
+        let popup_kind = PopupKind::Xdg(popup.clone());
+
+        let Ok(root_surface) = find_popup_root_surface(&popup_kind) else {
+            log::warn!(
+                "constrain_popup: could not find popup root surface {:?}",
+                popup.wl_surface().id()
+            );
+            return;
+        };
+
+        let root_size =
+            Self::surface_logical_size(&root_surface).unwrap_or_else(|| self.output_logical_size());
+
+        let mut target = Rectangle::from_size(root_size);
+        target.loc -= get_popup_toplevel_coords(&popup_kind);
+
+        popup.with_pending_state(|state| {
+            state.geometry = state.positioner.get_unconstrained_geometry(target);
+        });
+    }
 }
 
 impl compositor::CompositorHandler for Application {
@@ -135,12 +238,9 @@ impl compositor::CompositorHandler for Application {
                     match buffer_type(&buffer) {
                         Some(BufferType::Dma) => {
                             let dmabuf = get_dmabuf(&buffer).unwrap(); // always Ok due to buffer_type
-                            if let Ok(image) = self
-                                .image_importer
-                                .get_or_import_dmabuf(dmabuf.clone())
-                                .inspect_err(|e| {
-                                    log::warn!("wayland_server failed to import DMA-buf: {e:?}");
-                                })
+
+                            if let Ok(image) =
+                                self.image_importer.get_or_import_dmabuf(dmabuf.clone())
                             {
                                 let sbwi = SurfaceBufWithImage {
                                     image,
@@ -150,7 +250,14 @@ impl compositor::CompositorHandler for Application {
                                     scale: attrs.buffer_scale,
                                     dmabuf: true,
                                 };
-                                sbwi.apply_to_surface(states);
+
+                                if let Some(old_buffer) =
+                                    sbwi.apply_to_surface(states, Some(buffer.clone()))
+                                {
+                                    old_buffer.release();
+                                }
+                            } else {
+                                buffer.release();
                             }
                         }
                         Some(BufferType::Shm) => {
@@ -170,9 +277,10 @@ impl compositor::CompositorHandler for Application {
                                         scale: attrs.buffer_scale,
                                         dmabuf: false,
                                     };
-                                    sbwi.apply_to_surface(states);
+                                    sbwi.apply_to_surface(states, None);
                                 }
                             });
+                            buffer.release();
                         }
                         Some(BufferType::SinglePixel) => {
                             let spb = get_single_pixel_buffer(&buffer).unwrap(); // always Ok
@@ -190,21 +298,23 @@ impl compositor::CompositorHandler for Application {
                                     scale: attrs.buffer_scale,
                                     dmabuf: false,
                                 };
-                                sbwi.apply_to_surface(states);
+                                sbwi.apply_to_surface(states, None);
                             }
+                            buffer.release();
                         }
                         Some(other) => log::warn!("Unsupported wl_buffer format: {other:?}"),
                         None => { /* don't draw anything */ }
                     }
-                    buffer.release();
                 }
                 Some(BufferAssignment::Removed) | None => {}
             }
 
-            let t = time::get_millis() as u32;
             let callbacks = std::mem::take(&mut attrs.frame_callbacks);
-            for cb in callbacks {
-                cb.done(t);
+            if !callbacks.is_empty() {
+                self.pending_frame_callbacks
+                    .entry(surface.id())
+                    .or_default()
+                    .extend(callbacks);
             }
         });
 
@@ -228,11 +338,8 @@ impl SeatHandler for Application {
         set_primary_focus(dh, seat, client);
     }
 
-    fn cursor_image(
-        &mut self,
-        _seat: &Seat<Self>,
-        _image: smithay::input::pointer::CursorImageStatus,
-    ) {
+    fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        self.cursor_image = image;
     }
 }
 
@@ -313,17 +420,17 @@ impl XdgShellHandler for Application {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        if let Some(client) = surface.wl_surface().client() {
+        let wl_surface = surface.wl_surface();
+        self.send_initial_surface_state(wl_surface);
+        if let Some(client) = wl_surface.client() {
             self.wayvr_tasks
                 .send(WayVRTask::NewToplevel(client.id(), surface.clone()));
         }
-        surface.with_pending_state(|state| {
-            state.states.set(xdg_toplevel::State::Activated);
-        });
-        surface.send_configure();
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        self.output.leave(surface.wl_surface());
+
         if let Some(client) = surface.wl_surface().client() {
             self.wayvr_tasks
                 .send(WayVRTask::DropToplevel(client.id(), surface.clone()));
@@ -331,6 +438,8 @@ impl XdgShellHandler for Application {
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
+        self.constrain_popup(&surface);
+
         let _ = self
             .popup_manager
             .track_popup(PopupKind::Xdg(surface))
@@ -342,54 +451,142 @@ impl XdgShellHandler for Application {
         self.popup_manager.cleanup();
     }
 
-    fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {
-        // Handle popup grab here
+    fn grab(&mut self, surface: PopupSurface, seat: wl_seat::WlSeat, serial: Serial) {
+        log::info!(
+            "xdg_popup.grab: surface={:?} serial={:?}",
+            surface.wl_surface().id(),
+            serial
+        );
+
+        let popup = PopupKind::Xdg(surface);
+
+        let Ok(root_surface) = find_popup_root_surface(&popup) else {
+            log::warn!("xdg_popup.grab: could not find popup root surface");
+            return;
+        };
+
+        let Some(seat) = Seat::<Application>::from_resource(&seat) else {
+            log::warn!("xdg_popup.grab: unknown seat");
+            return;
+        };
+
+        let root_focus = root_surface;
+
+        let Ok(mut grab) = self
+            .popup_manager
+            .grab_popup::<Application>(root_focus, popup, &seat, serial)
+        else {
+            log::debug!("xdg_popup.grab denied");
+            return;
+        };
+
+        if let Some(keyboard) = seat.get_keyboard() {
+            if keyboard.is_grabbed()
+                && !(keyboard.has_grab(serial)
+                    || keyboard.has_grab(grab.previous_serial().unwrap_or(serial)))
+            {
+                grab.ungrab(PopupUngrabStrategy::All);
+                return;
+            }
+
+            keyboard.set_focus(self, grab.current_grab(), serial);
+            keyboard.set_grab(self, PopupKeyboardGrab::new(&grab), serial);
+        }
+
+        if let Some(pointer) = seat.get_pointer() {
+            if pointer.is_grabbed()
+                && !(pointer.has_grab(serial)
+                    || pointer.has_grab(grab.previous_serial().unwrap_or_else(|| grab.serial())))
+            {
+                grab.ungrab(PopupUngrabStrategy::All);
+                return;
+            }
+
+            pointer.set_grab(self, PopupPointerGrab::new(&grab), serial, Focus::Keep);
+        }
     }
 
     fn reposition_request(
         &mut self,
-        _surface: PopupSurface,
-        _positioner: PositionerState,
-        _token: u32,
+        surface: PopupSurface,
+        positioner: PositionerState,
+        token: u32,
     ) {
-        // Handle popup reposition here
+        surface.with_pending_state(|state| {
+            state.geometry = positioner.get_geometry();
+            state.positioner = positioner;
+        });
+
+        self.constrain_popup(&surface);
+        surface.send_repositioned(token);
     }
 
-    // If the app wants to be fullscreen, make it think that it's fullscreen.
+    // If the app requests fullscreen, make it fill the virtual output
     fn fullscreen_request(
         &mut self,
         surface: ToplevelSurface,
         _output: Option<wl_output::WlOutput>,
     ) {
+        let size = self.output_logical_size();
+
         surface.with_pending_state(|state| {
+            state.bounds = Some(size);
+            state.size = Some(size);
             state.states.set(xdg_toplevel::State::Fullscreen);
         });
+
         surface.send_configure();
     }
-    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
-        surface.with_pending_state(|state| {
-            state.states.unset(xdg_toplevel::State::Fullscreen);
-        });
-        surface.send_configure();
-    }
-    // If the app wants to be maximized, make it think that it's maximized.
+
+    // If the app requests maximize, make it fill the virtual output
     fn maximize_request(&mut self, surface: ToplevelSurface) {
+        let size = self.output_logical_size();
+
         surface.with_pending_state(|state| {
+            state.bounds = Some(size);
+            state.size = Some(size);
             state.states.set(xdg_toplevel::State::Maximized);
         });
+
         surface.send_configure();
     }
-    fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        let bounds = self.output_logical_size();
+
         surface.with_pending_state(|state| {
+            state.bounds = Some(bounds);
+            state.size = None;
+            state.states.unset(xdg_toplevel::State::Fullscreen);
+        });
+
+        surface.send_configure();
+    }
+
+    fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        let bounds = self.output_logical_size();
+
+        surface.with_pending_state(|state| {
+            state.bounds = Some(bounds);
+            state.size = None;
             state.states.unset(xdg_toplevel::State::Maximized);
         });
+
         surface.send_configure();
     }
+
     // If the app requests minimize, hide its window
     fn minimize_request(&mut self, surface: ToplevelSurface) {
         if let Some(client) = surface.wl_surface().client() {
             self.wayvr_tasks
                 .send(WayVRTask::MinimizeRequest(client.id(), surface.clone()));
+        }
+    }
+
+    fn title_changed(&mut self, surface: ToplevelSurface) {
+        if let Some(client) = surface.wl_surface().client() {
+            self.wayvr_tasks
+                .send(WayVRTask::TitleChange(client.id(), surface.clone()));
         }
     }
 }
@@ -438,24 +635,30 @@ impl selection_ext::DataControlHandler for Application {
         &self.ext_data_control_state
     }
 }
-
 impl XdgDecorationHandler for Application {
     fn new_decoration(&mut self, toplevel: ToplevelSurface) {
         toplevel.with_pending_state(|state| {
             state.decoration_mode = Some(zxdg_toplevel_decoration_v1::Mode::ServerSide);
         });
+        toplevel.send_configure();
     }
 
     fn request_mode(
         &mut self,
-        _toplevel: ToplevelSurface,
+        toplevel: ToplevelSurface,
         _mode: zxdg_toplevel_decoration_v1::Mode,
     ) {
-        // no switching away from SSD
+        toplevel.with_pending_state(|state| {
+            state.decoration_mode = Some(zxdg_toplevel_decoration_v1::Mode::ServerSide);
+        });
+        toplevel.send_configure();
     }
 
-    fn unset_mode(&mut self, _toplevel: ToplevelSurface) {
-        // no switching away from SSD
+    fn unset_mode(&mut self, toplevel: ToplevelSurface) {
+        toplevel.with_pending_state(|state| {
+            state.decoration_mode = Some(zxdg_toplevel_decoration_v1::Mode::ServerSide);
+        });
+        toplevel.send_configure();
     }
 }
 
@@ -477,6 +680,7 @@ impl KdeDecorationHandler for Application {
 delegate_dmabuf!(Application);
 delegate_xdg_shell!(Application);
 delegate_compositor!(Application);
+delegate_viewporter!(Application);
 delegate_shm!(Application);
 delegate_seat!(Application);
 delegate_data_device!(Application);
@@ -487,6 +691,7 @@ delegate_ext_data_control!(Application);
 delegate_xdg_decoration!(Application);
 delegate_kde_decoration!(Application);
 delegate_single_pixel_buffer!(Application);
+delegate_relative_pointer!(Application);
 
 const fn wl_transform_to_frame_transform(
     transform: wl_output::Transform,

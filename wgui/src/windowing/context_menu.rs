@@ -1,17 +1,15 @@
-use std::{collections::HashMap, rc::Rc};
-
-use glam::Vec2;
-
 use crate::{
 	assets::AssetPath,
 	components::{ComponentTrait, button::ComponentButton},
 	globals::WguiGlobals,
 	i18n::Translation,
 	layout::Layout,
-	parser::{self, Fetchable, ParserState},
+	parser::{self, Fetchable, ParserState, TemplateParams},
 	task::Tasks,
-	windowing::window::{WguiWindow, WguiWindowParams, WguiWindowParamsExtra},
+	windowing::window::{WguiWindow, WguiWindowParams, WguiWindowParamsExtra, WguiWindowPlacement},
 };
+use glam::Vec2;
+use std::rc::Rc;
 
 #[derive(Clone)]
 pub struct Cell {
@@ -25,7 +23,7 @@ pub enum Blueprint {
 	Cells(Vec<Cell>),
 	Template {
 		template_name: Rc<str>,
-		template_params: HashMap<Rc<str>, Rc<str>>,
+		template_params: TemplateParams,
 	},
 }
 
@@ -77,7 +75,7 @@ impl ContextMenu {
 		self.window.close();
 	}
 
-	fn open_process(
+	fn process_open(
 		&mut self,
 		params: OpenParams,
 		layout: &mut Layout,
@@ -91,14 +89,27 @@ impl ContextMenu {
 			Blueprint::Cells(cells) => cells,
 		};
 
+		let root_size = layout.state.get_widget_size(layout.content_root_widget);
+
+		let (window_pos, placement) = if params.position.y < root_size.y / 2.0 {
+			(params.position, WguiWindowPlacement::TopLeft)
+		} else {
+			// invert y axis (position.y is counted from the bottom)
+			(
+				Vec2::new(params.position.x, root_size.y - params.position.y),
+				WguiWindowPlacement::BottomLeft,
+			)
+		};
+
 		let globals = layout.state.globals.clone();
 
 		self.window.open(&mut WguiWindowParams {
 			layout,
-			position: params.position,
+			position: window_pos,
 			extra: WguiWindowParamsExtra {
 				with_decorations: false,
 				close_if_clicked_outside: true,
+				placement,
 				..Default::default()
 			},
 		})?;
@@ -111,10 +122,10 @@ impl ContextMenu {
 		let id_buttons = inner_parser.get_widget_id("buttons")?;
 
 		for (idx, cell) in cells.iter().enumerate() {
-			let mut par = HashMap::new();
-			par.insert(Rc::from("text"), cell.title.generate(&mut globals.i18n()));
+			let mut par = TemplateParams::new();
+			par.insert_rc("text", cell.title.generate(&mut globals.i18n()));
 			if let Some(tooltip) = cell.tooltip.as_ref() {
-				par.insert(Rc::from("tooltip_str"), tooltip.generate(&mut globals.i18n()));
+				par.insert_rc("tooltip_str", tooltip.generate(&mut globals.i18n()));
 			}
 
 			let mut data_cell = inner_parser.parse_template_only(&doc_params, "Cell", layout, id_buttons, par)?;
@@ -144,7 +155,7 @@ impl ContextMenu {
 
 	pub fn tick(&mut self, layout: &mut Layout, parser_state: &mut ParserState) -> anyhow::Result<TickResult> {
 		if let Some(p) = self.pending_open.take() {
-			self.open_process(p, layout, parser_state)?;
+			self.process_open(p, layout, parser_state)?;
 			let _ = self.tasks.drain();
 			return Ok(TickResult::Opened);
 		}

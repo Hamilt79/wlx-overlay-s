@@ -14,26 +14,24 @@ use button::setup_custom_button;
 use glam::{Affine2, Vec2, vec2};
 use idmap::IdMap;
 use label::setup_custom_label;
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use wgui::{
     assets::AssetPath,
     components::{
         button::ComponentButton, checkbox::ComponentCheckbox, radio_group::ComponentRadioGroup,
         slider::ComponentSlider,
     },
+    drawing,
     event::{
-        Event as WguiEvent, EventCallback, EventListenerID, EventListenerKind,
+        DeviceBitmask, Event as WguiEvent, EventCallback, EventListenerID, EventListenerKind,
         InternalStateChangeEvent, MouseButtonEvent, MouseButtonIndex, MouseLeaveEvent,
         MouseMotionEvent, MouseWheelEvent,
     },
     gfx::cmd::WGfxClearMode,
     i18n::Translation,
-    layout::{Layout, LayoutParams, LayoutUpdateParams, WidgetID},
-    parser::{
-        self, CustomAttribsInfoOwned, Fetchable, ParseDocumentExtra, ParserState, parse_color_hex,
-    },
+    layout::{Layout, LayoutParams, LayoutTask, LayoutUpdateParams, WidgetID},
+    parser::{self, CustomAttribsInfoOwned, Fetchable, ParseDocumentExtra, ParserState},
     renderer_vk::{context::Context as WguiContext, text::custom_glyph::CustomGlyphData},
-    taffy,
     widget::{
         EventResult, image::WidgetImage, label::WidgetLabel, rectangle::WidgetRectangle,
         sprite::WidgetSprite,
@@ -96,6 +94,7 @@ pub struct NewGuiPanelParams<S> {
     pub resize_to_parent: bool,
     pub external_xml: bool,
     pub gui_scale: f32,
+    pub extra_vars: HashMap<Rc<str>, Rc<str>>,
 }
 
 impl<S> Default for NewGuiPanelParams<S> {
@@ -106,6 +105,7 @@ impl<S> Default for NewGuiPanelParams<S> {
             resize_to_parent: false,
             external_xml: false,
             gui_scale: 1.0,
+            extra_vars: HashMap::default(),
         }
     }
 }
@@ -135,6 +135,7 @@ impl<S: 'static> GuiPanel<S> {
             },
             extra: wgui::parser::ParseDocumentExtra {
                 on_custom_attribs: Some(on_custom_attrib_inner.clone()),
+                extra_vars: params.extra_vars,
                 ..Default::default()
             },
         };
@@ -205,7 +206,10 @@ impl<S: 'static> GuiPanel<S> {
                 setup_custom_label::<S>(&mut self.layout, &self.parser_state, elem, app);
             } else if let Ok(button) = self
                 .parser_state
-                .fetch_component_from_widget_id_as::<ComponentButton>(elem.widget_id)
+                .fetch_component_from_widget_id_as::<ComponentButton>(
+                    &self.layout.state,
+                    elem.widget_id,
+                )
             {
                 setup_custom_button::<S>(
                     &mut self.layout,
@@ -356,6 +360,9 @@ impl<S: 'static> OverlayBackend for GuiPanel<S> {
     }
 
     fn notify(&mut self, app: &mut AppState, data: OverlayEventData) -> anyhow::Result<()> {
+        if matches!(data, OverlayEventData::ColorPaletteRefresh) {
+            self.layout.tasks.push(LayoutTask::RefreshPalette);
+        }
         let Some(on_notify) = self.on_notify.take() else {
             return Ok(());
         };
@@ -368,7 +375,7 @@ impl<S: 'static> OverlayBackend for GuiPanel<S> {
         let e = WguiEvent::MouseWheel(MouseWheelEvent {
             delta: vec2(delta.x, delta.y) / 8.0,
             pos: hit.uv * self.layout.content_size,
-            device: hit.pointer,
+            device: DeviceBitmask::from_index(hit.pointer),
         });
         self.push_event(app, &e);
     }
@@ -376,7 +383,7 @@ impl<S: 'static> OverlayBackend for GuiPanel<S> {
     fn on_hover(&mut self, app: &mut AppState, hit: &PointerHit) -> HoverResult {
         let e = &WguiEvent::MouseMotion(MouseMotionEvent {
             pos: hit.uv * self.layout.content_size,
-            device: hit.pointer,
+            device: DeviceBitmask::from_index(hit.pointer),
         });
 
         self.has_focus[hit.pointer] = true;
@@ -397,7 +404,9 @@ impl<S: 'static> OverlayBackend for GuiPanel<S> {
     }
 
     fn on_left(&mut self, app: &mut AppState, pointer: usize) {
-        let e = WguiEvent::MouseLeave(MouseLeaveEvent { device: pointer });
+        let e = WguiEvent::MouseLeave(MouseLeaveEvent {
+            device: DeviceBitmask::from_index(pointer),
+        });
         self.has_focus[pointer] = false;
         self.push_event(app, &e);
     }
@@ -414,13 +423,13 @@ impl<S: 'static> OverlayBackend for GuiPanel<S> {
             WguiEvent::MouseDown(MouseButtonEvent {
                 pos: hit.uv * self.layout.content_size,
                 index,
-                device: hit.pointer,
+                device: DeviceBitmask::from_index(hit.pointer),
             })
         } else {
             WguiEvent::MouseUp(MouseButtonEvent {
                 pos: hit.uv * self.layout.content_size,
                 index,
-                device: hit.pointer,
+                device: DeviceBitmask::from_index(hit.pointer),
             })
         };
         self.push_event(app, &e);
@@ -429,11 +438,11 @@ impl<S: 'static> OverlayBackend for GuiPanel<S> {
         if !pressed && !self.has_focus[hit.pointer] {
             let e = WguiEvent::MouseMotion(MouseMotionEvent {
                 pos: vec2(-1., -1.),
-                device: hit.pointer,
+                device: DeviceBitmask::from_index(hit.pointer),
             });
             self.push_event(app, &e);
             let e = WguiEvent::MouseLeave(MouseLeaveEvent {
-                device: hit.pointer,
+                device: DeviceBitmask::from_index(hit.pointer),
             });
             self.push_event(app, &e);
         }
@@ -496,7 +505,7 @@ pub fn apply_custom_command<T>(
         ModifyPanelCommand::SetText(text) => {
             if let Ok(mut label) = panel
                 .parser_state
-                .fetch_widget_as::<WidgetLabel>(&com.state, element)
+                .fetch_widget_as::<WidgetLabel>(com.state, element)
             {
                 label.set_text(&mut com, Translation::from_raw_text(text));
             } else if let Ok(button) = panel
@@ -509,7 +518,7 @@ pub fn apply_custom_command<T>(
             }
         }
         ModifyPanelCommand::SetImage(path) => {
-            if let Ok(pair) = panel.parser_state.fetch_widget(&com.state, element) {
+            if let Ok(pair) = panel.parser_state.fetch_widget(com.state, element) {
                 let data = CustomGlyphData::from_assets(
                     &app.wgui_globals,
                     wgui::assets::AssetPath::File(path),
@@ -528,16 +537,16 @@ pub fn apply_custom_command<T>(
             }
         }
         ModifyPanelCommand::SetColor(color) => {
-            let color = parse_color_hex(color)
+            let color = drawing::Color::from_hex(color)
                 .context("Invalid color format, must be a html hex color!")?;
 
-            if let Ok(pair) = panel.parser_state.fetch_widget(&com.state, element) {
+            if let Ok(pair) = panel.parser_state.fetch_widget(com.state, element) {
                 if let Some(mut rect) = pair.widget.get_as::<WidgetRectangle>() {
-                    rect.set_color(&mut com, color);
+                    rect.set_color(&mut com, color.into());
                 } else if let Some(mut label) = pair.widget.get_as::<WidgetLabel>() {
-                    label.set_color(&mut com, color, true);
+                    label.set_color(&mut com, color.into(), true);
                 } else if let Some(mut sprite) = pair.widget.get_as::<WidgetSprite>() {
-                    sprite.set_color(&mut com, color);
+                    sprite.set_color(&mut com, color.into());
                 } else {
                     anyhow::bail!("No <rectangle> or <label> or <sprite> with such id.");
                 }
@@ -550,15 +559,7 @@ pub fn apply_custom_command<T>(
                 .parser_state
                 .get_widget_id(element)
                 .context("No widget with such id.")?;
-
-            let display = if *visible {
-                taffy::Display::Flex
-            } else {
-                taffy::Display::None
-            };
-
-            com.alterables
-                .set_style(wid, wgui::event::StyleSetRequest::Display(display));
+            com.alterables.set_widget_visible(wid, *visible);
             com.alterables.mark_redraw();
         }
         ModifyPanelCommand::SetValue(value_str) => {
@@ -579,7 +580,7 @@ pub fn apply_custom_command<T>(
                 .fetch_component_as::<ComponentSlider>(element)
             {
                 let value_f32 = value_str.parse::<f32>().context("Not a valid number")?;
-                slider.set_value(&mut com, value_f32);
+                slider.set_value_primary(&mut com, value_f32);
             } else if let Ok(radio) = panel
                 .parser_state
                 .fetch_component_as::<ComponentRadioGroup>(element)

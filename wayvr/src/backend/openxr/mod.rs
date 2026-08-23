@@ -10,12 +10,16 @@ use input::OpenXrInputSource;
 use openxr as xr;
 use skybox::{Skybox, create_skybox};
 use vulkano::{Handle, VulkanObject};
-use wlx_common::overlays::{StereoMode, ToastTopic};
+use wgui::i18n::Translation;
+use wlx_common::{
+    dash_interface::InterfaceFeats,
+    overlays::{StereoMode, ToastTopic},
+};
 
 use crate::{
-    FRAME_COUNTER, RUNNING,
+    Args, FRAME_COUNTER, RUNNING, XrBackend,
     backend::{
-        BackendError, XrBackend,
+        BackendError, RunParams,
         input::interact,
         openxr::{helpers::try_apply_chroma_key, lines::LinePool, overlay::OpenXrOverlayData},
         task::{OpenXrTask, OverlayTask, TaskType},
@@ -24,7 +28,6 @@ use crate::{
     graphics::{GpuFutures, init_openxr_graphics},
     overlays::{toast::Toast, watch::WATCH_NAME},
     state::AppState,
-    subsystem::notifications::NotificationManager,
     windowing::{
         backend::{RenderResources, RenderTarget, ShouldRender},
         manager::OverlayWindowManager,
@@ -53,52 +56,51 @@ struct XrState {
 }
 
 #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
-pub fn openxr_run(
-    show_by_default: bool,
-    headless: bool,
-    no_autostart: bool,
-) -> Result<(), BackendError> {
+pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
     let (xr_instance, system) = match helpers::init_xr() {
         Ok((xr_instance, system)) => (xr_instance, system),
         Err(e) => {
-            log::warn!("Will not use OpenXR: {e}");
+            if !args.wait {
+                log::warn!("Will not use OpenXR: {e}");
+            }
             return Err(BackendError::NotSupported);
         }
     };
 
-    let mut app = {
-        let (gfx, gfx_extras) = init_openxr_graphics(xr_instance.clone(), system)?;
-        AppState::from_graphics(gfx, gfx_extras, XrBackend::OpenXR)?
+    let feats = InterfaceFeats {
+        passthru: xr_instance
+            .exts()
+            .fb_composition_layer_alpha_blend
+            .is_some(),
+        ..InterfaceFeats::default_for_backend(XrBackend::OpenXR)
     };
 
-    app.session.no_autostart = no_autostart;
+    let mut app = {
+        let (gfx, gfx_extras) = init_openxr_graphics(xr_instance.clone(), system)?;
+        AppState::from_graphics(gfx, gfx_extras, feats, params)?
+    };
+
+    app.session.no_autostart = args.no_autostart;
 
     let modes = xr_instance.enumerate_environment_blend_modes(system, VIEW_TYPE)?;
 
-    if show_by_default {
+    if args.show {
+        app.session.config.tutorial_graduated = true;
         app.tasks.enqueue_at(
             TaskType::Overlay(OverlayTask::ShowHide),
             Instant::now().add(Duration::from_secs(1)),
         );
     }
 
-    let mut overlays = OverlayWindowManager::<OpenXrOverlayData>::new(&mut app, headless)?;
+    let mut overlays = OverlayWindowManager::<OpenXrOverlayData>::new(&mut app, args.headless)?;
     let mut lines = LinePool::new(&app)?;
     let mut current_lines = Vec::with_capacity(2);
 
-    let mut notifications = NotificationManager::new();
-    notifications.run_dbus(&mut app.dbus);
-    notifications.run_udp();
-
     let mut delete_queue = vec![];
 
-    app.monado_state_init();
+    app.late_init();
 
-    let mut playspace = app.monado_state.as_mut().and_then(|m| {
-        playspace::PlayspaceMover::new(&mut m.ipc)
-            .map_err(|e| log::warn!("Will not use Monado playspace mover: {e}"))
-            .ok()
-    });
+    let mut playspace_mover = playspace::PlayspaceMover::new();
 
     let mut blocker = app
         .monado_state
@@ -155,8 +157,12 @@ pub fn openxr_run(
 
     let mut main_session_visible = false;
     let mut environment_blend_mode = modes[0];
+    let mut last_frame_time = Instant::now();
 
     'main_loop: loop {
+        let now = Instant::now();
+        app.delta_time = (now.duration_since(last_frame_time).as_secs_f32()).clamp(0.001, 0.2); // 5 - 1000 fps
+        last_frame_time = now;
         let cur_frame = FRAME_COUNTER.fetch_add(1, Ordering::Relaxed);
 
         if !RUNNING.load(Ordering::Relaxed) {
@@ -296,9 +302,7 @@ pub fn openxr_run(
                 .enqueue(TaskType::Overlay(OverlayTask::ToggleDashboard));
         }
 
-        if let Some(ref mut space_mover) = playspace {
-            space_mover.update(&mut overlays, &mut app);
-        }
+        playspace_mover.update(&mut overlays, &mut app);
 
         for o in overlays.values_mut() {
             o.after_input(&mut app)?;
@@ -319,8 +323,12 @@ pub fn openxr_run(
         if (app.input_state.ipd - ipd).abs() > 0.05 {
             log::info!("IPD changed: {} -> {}", app.input_state.ipd, ipd);
             app.input_state.ipd = ipd;
-            Toast::new(ToastTopic::IpdChange, "IPD".into(), format!("{ipd:.1} mm"))
-                .submit(&mut app);
+            Toast::new(
+                ToastTopic::IpdChange,
+                Some(Translation::from_raw_text("IPD")),
+                Translation::from_raw_text_string(format!("{ipd:.1} mm")),
+            )
+            .submit(&mut app);
         }
 
         overlays.values_mut().for_each(|o| o.config.tick(&mut app));
@@ -346,9 +354,12 @@ pub fn openxr_run(
         app.hid_provider.inner.commit();
 
         let watch = overlays.mut_by_id(watch_id).unwrap(); // want panic
+        if watch.config.active_state.is_none() {
+            watch.config.activate(&mut app, true);
+        }
         let watch_state = watch.config.active_state.as_mut().unwrap();
         let watch_transform = watch_state.transform;
-        if watch_state.alpha < 0.05 {
+        if watch_state.alpha < 0.05 || !app.session.config.enable_watch {
             //FIXME: Temporary workaround for Monado bug
             watch_state.transform = Affine3A::from_scale(Vec3 {
                 x: 0.001,
@@ -468,12 +479,13 @@ pub fn openxr_run(
         )?;
         // End layer submit
 
-        app.dbus.tick();
-        notifications.submit_pending(&mut app);
-
+        app.tick();
         app.tasks.retrieve_due(&mut due_tasks);
         while let Some(task) = due_tasks.pop_front() {
             match task {
+                TaskType::Global(task) => {
+                    task(&mut app);
+                }
                 TaskType::Input(task) => {
                     app.input_state.handle_task(task);
                 }
@@ -481,9 +493,7 @@ pub fn openxr_run(
                     overlays.handle_task(&mut app, task)?;
                 }
                 TaskType::Playspace(task) => {
-                    if let Some(playspace) = playspace.as_mut() {
-                        playspace.handle_task(&mut app, task);
-                    }
+                    playspace_mover.handle_task(&mut app, &mut overlays, task);
                 }
                 TaskType::OpenXR(task) => {
                     if matches!(task, OpenXrTask::EnvironmentChanged) {
@@ -510,7 +520,13 @@ pub fn openxr_run(
 
         //FIXME: Temporary workaround for Monado bug
         let watch = overlays.mut_by_id(watch_id).unwrap(); // want panic
-        watch.config.active_state.as_mut().unwrap().transform = watch_transform;
+
+        if let Some(state) = watch.config.active_state.as_mut() {
+            state.transform = watch_transform;
+        }
+        if !app.session.config.enable_watch {
+            watch.config.deactivate();
+        }
     } // main_loop
 
     if let (Some(blocker), Some(monado)) = (blocker, app.monado_state.as_mut()) {

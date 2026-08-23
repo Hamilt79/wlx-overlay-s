@@ -1,14 +1,13 @@
 use crate::{
+	color::ParentColor,
 	layout::WidgetID,
 	parser::{
 		AttribPair, ParserContext, ParserFile, get_asset_path_from_kv, parse_children, parse_widget_universal,
-		style::parse_style,
+		style::{parse_color_opt, parse_style},
 	},
 	renderer_vk::text::custom_glyph::CustomGlyphData,
 	widget::sprite::{WidgetSprite, WidgetSpriteParams},
 };
-
-use super::parse_color_hex;
 
 pub fn parse_widget_sprite<'a>(
 	file: &'a ParserFile,
@@ -39,11 +38,10 @@ pub fn parse_widget_sprite<'a>(
 				}
 			}
 			"color" => {
-				if let Some(color) = parse_color_hex(value) {
-					params.color = Some(color);
-				} else {
-					ctx.print_invalid_attrib(tag_name, key, value);
-				}
+				parse_color_opt(ctx, tag_name, key, value, &mut params.color);
+			}
+			"parent_color" => {
+				params.parent_color = ParentColor::try_from(value).unwrap_or_default();
 			}
 			_ => {}
 		}

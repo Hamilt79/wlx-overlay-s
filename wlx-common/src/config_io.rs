@@ -25,6 +25,10 @@ pub fn get_skymaps_root() -> PathBuf {
 	get_config_root().join("skymaps")
 }
 
+pub fn get_palettes_root() -> PathBuf {
+	get_config_root().join("palettes")
+}
+
 pub fn get_skymaps_uuids() -> anyhow::Result<Vec<String>> {
 	let data = std::fs::read_to_string(get_skymaps_root().join("skymaps.txt"))?;
 	Ok(data.lines().filter(|line| !line.is_empty()).map(String::from).collect())
@@ -65,4 +69,10 @@ pub fn load(filename: &str) -> Option<String> {
 	log::info!("Loading config: {}", path.to_string_lossy());
 
 	std::fs::read_to_string(path).ok()
+}
+
+pub fn save(filename: &str, content: &str) -> anyhow::Result<()> {
+	let path = get_config_file_path(filename);
+	std::fs::write(path, content)?;
+	Ok(())
 }

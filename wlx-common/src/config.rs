@@ -1,9 +1,9 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, rc::Rc, sync::Arc};
 
 use chrono::Offset;
 use idmap::IdMap;
 use serde::{Deserialize, Serialize};
-use strum::{AsRefStr, EnumProperty, EnumString, VariantArray};
+use strum::{AsRefStr, EnumProperty, EnumString, VariantArray, VariantNames};
 use wayvr_ipc::packet_client::WvrProcessLaunchParams;
 use wgui::drawing::{self, HsvColor};
 
@@ -28,7 +28,11 @@ pub enum CaptureMethod {
 	#[strum(props(Text = "PipeWire GPU", Tooltip = "APP_SETTINGS.OPTION.PIPEWIRE_HELP"))]
 	PipeWire,
 
-	#[strum(props(Text = "ScreenCopy GPU", Tooltip = "APP_SETTINGS.OPTION.SCREENCOPY_GPU_HELP"))]
+	#[strum(props(
+		Text = "ScreenCopy GPU",
+		Tooltip = "APP_SETTINGS.OPTION.SCREENCOPY_GPU_HELP",
+		Desktop = "Wayland"
+	))]
 	ScreenCopyGpu,
 
 	#[serde(alias = "pw-fallback")]
@@ -36,8 +40,61 @@ pub enum CaptureMethod {
 	PipeWireCpu,
 
 	#[serde(alias = "screencopy")]
-	#[strum(props(Text = "ScreenCopy CPU", Tooltip = "APP_SETTINGS.OPTION.SCREENCOPY_HELP"))]
+	#[strum(props(
+		Text = "ScreenCopy CPU",
+		Tooltip = "APP_SETTINGS.OPTION.SCREENCOPY_HELP",
+		Desktop = "Wayland"
+	))]
 	ScreenCopyCpu,
+}
+
+#[derive(Default, Clone, Copy, Serialize, Deserialize, AsRefStr, EnumString, EnumProperty, VariantArray)]
+pub enum InputEmulationMethod {
+	#[default]
+	#[strum(props(
+		Translation = "APP_SETTINGS.OPTION.UINPUT",
+		Tooltip = "APP_SETTINGS.OPTION.UINPUT_HELP"
+	))]
+	Uinput,
+
+	#[strum(props(
+		Translation = "APP_SETTINGS.OPTION.WL_VIRTUAL",
+		Tooltip = "APP_SETTINGS.OPTION.WL_VIRTUAL_HELP",
+		Desktop = "Wayland"
+	))]
+	WlVirtual,
+
+	#[strum(props(
+		Translation = "APP_SETTINGS.OPTION.NONE",
+		Tooltip = "APP_SETTINGS.OPTION.NONE_INPUT_HELP"
+	))]
+	None,
+}
+
+#[derive(Default, Clone, Copy, Serialize, Deserialize, AsRefStr, EnumString, EnumProperty, VariantArray)]
+pub enum InputCaptureMethod {
+	#[strum(props(Tooltip = "APP_SETTINGS.OPTION.EVDEV_HELP"))]
+	Evdev,
+
+	#[default]
+	#[strum(props(
+		Translation = "APP_SETTINGS.OPTION.NONE",
+		Tooltip = "APP_SETTINGS.OPTION.NONE_INPUT_CAPTURE_HELP"
+	))]
+	None,
+}
+
+#[derive(Default, Clone, Copy, Serialize, Deserialize, AsRefStr, EnumString, EnumProperty, VariantArray)]
+pub enum DefaultPositioning {
+	#[default]
+	#[strum(props(Translation = "DEFINITIONS.ANCHORED", Tooltip = "APP_SETTINGS.OPTION.ANCHORED_HELP"))]
+	Anchored,
+
+	#[strum(props(Translation = "DEFINITIONS.FLOATING", Tooltip = "APP_SETTINGS.OPTION.FLOATING_HELP",))]
+	Floating,
+
+	#[strum(props(Translation = "DEFINITIONS.STATIC", Tooltip = "APP_SETTINGS.OPTION.STATIC_HELP"))]
+	Static,
 }
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, AsRefStr, EnumString, EnumProperty, VariantArray)]
@@ -49,7 +106,8 @@ pub enum AltModifier {
 	Ctrl,
 	Alt,
 	Super,
-	Meta,
+	#[serde(alias = "Meta")]
+	AltGr,
 }
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, AsRefStr, EnumString, EnumProperty, VariantArray)]
@@ -61,10 +119,28 @@ pub enum HandsfreePointer {
 	Hmd,
 	#[strum(props(Translation = "APP_SETTINGS.OPTION.HMD_ONLY"))]
 	HmdOnly,
-	#[strum(props(Translation = "APP_SETTINGS.OPTION.EYE_PINCH"))]
+	#[strum(props(Translation = "APP_SETTINGS.OPTION.EYE_PINCH", Backend = "OpenXR"))]
 	EyeTracking,
-	#[strum(props(Translation = "APP_SETTINGS.OPTION.EYE_ONLY"))]
+	#[strum(props(Translation = "APP_SETTINGS.OPTION.EYE_ONLY", Backend = "OpenXR"))]
 	EyeTrackingOnly,
+}
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, AsRefStr, EnumString, EnumProperty, VariantArray)]
+pub enum HandsfreeAltTab {
+	#[strum(props(Translation = "APP_SETTINGS.OPTION.HMD_ONLY"))]
+	#[default]
+	Hmd,
+	#[strum(props(Translation = "APP_SETTINGS.OPTION.EYE_ONLY", Backend = "OpenXR"))]
+	EyeTracking,
+}
+
+impl From<HandsfreeAltTab> for HandsfreePointer {
+	fn from(value: HandsfreeAltTab) -> Self {
+		match value {
+			HandsfreeAltTab::Hmd => HandsfreePointer::HmdOnly,
+			HandsfreeAltTab::EyeTracking => HandsfreePointer::EyeTrackingOnly,
+		}
+	}
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -129,6 +205,44 @@ pub struct SerializedWindowSet {
 	pub hidden_overlays: SerializedWindowStates,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Eq, PartialEq, EnumString, VariantNames, AsRefStr)]
+pub enum AppPosMode {
+	Floating,
+	Anchored,
+	Static,
+}
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Eq, PartialEq, EnumString, VariantNames, AsRefStr)]
+pub enum AppOrientationMode {
+	Wide,
+	SemiWide,
+	Square,
+	SemiTall,
+	Tall,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Eq, PartialEq, EnumString, VariantNames, AsRefStr)]
+pub enum AppCompositorMode {
+	Cage,
+	Native,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Eq, PartialEq, EnumString, VariantNames, AsRefStr)]
+pub enum AppResMode {
+	Res1440,
+	Res1080,
+	Res720,
+	Res480,
+}
+
+#[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
+pub struct PinnedApp {
+	pub app_id: Rc<str>, // desktop entry app id, for example "libreoffice-draw"
+	pub compositor_mode: AppCompositorMode,
+	pub pos_mode: AppPosMode,
+	pub orientation_mode: AppOrientationMode,
+	pub res_mode: AppResMode,
+}
+
 pub const fn def_pw_tokens() -> PwTokenMap {
 	AStrMap::new()
 }
@@ -143,10 +257,6 @@ const fn def_click_freeze_time_ms() -> i32 {
 
 const fn def_true() -> bool {
 	true
-}
-
-const fn def_false() -> bool {
-	false
 }
 
 const fn def_one() -> f32 {
@@ -165,6 +275,10 @@ const fn def_point3() -> f32 {
 	0.3
 }
 
+const fn def_point15() -> f32 {
+	0.15
+}
+
 const fn def_osc_port() -> u16 {
 	9000
 }
@@ -181,8 +295,8 @@ fn def_timezones() -> Vec<String> {
 	}
 }
 
-fn def_empty() -> Arc<str> {
-	"".into()
+fn def_default() -> Arc<str> {
+	"Default".into()
 }
 
 fn def_theme_path() -> Arc<str> {
@@ -197,12 +311,6 @@ const fn def_max_height() -> u16 {
 pub struct GeneralConfig {
 	#[serde(default = "def_theme_path")]
 	pub theme_path: Arc<str>,
-
-	pub color_text: Option<String>,
-	pub color_accent: Option<String>,
-	pub color_danger: Option<String>,
-	pub color_faded: Option<String>,
-	pub color_background: Option<String>,
 
 	pub language: Option<locale::Language>, // auto-detected at runtime if unset
 
@@ -220,15 +328,18 @@ pub struct GeneralConfig {
 	pub default_keymap: Option<String>,
 
 	#[serde(default)]
+	pub keyboard_layouts: Vec<Arc<str>>,
+
+	#[serde(default)]
 	pub attribs: AStrMap<Vec<BackendAttribValue>>,
 
 	#[serde(default = "def_click_freeze_time_ms")]
 	pub click_freeze_time_ms: i32,
 
-	#[serde(default = "def_false")]
+	#[serde(default)]
 	pub invert_scroll_direction_x: bool,
 
-	#[serde(default = "def_false")]
+	#[serde(default)]
 	pub invert_scroll_direction_y: bool,
 
 	#[serde(default = "def_one")]
@@ -256,7 +367,7 @@ pub struct GeneralConfig {
 	pub keyboard_scale: f32,
 
 	#[serde(default = "def_one")]
-	pub desktop_view_scale: f32,
+	pub default_overlay_scale: f32,
 
 	#[serde(default = "def_half")]
 	pub watch_view_angle_min: f32,
@@ -267,16 +378,19 @@ pub struct GeneralConfig {
 	#[serde(default = "def_osc_port")]
 	pub osc_out_port: u16,
 
-	#[serde(default = "def_false")]
+	#[serde(default)]
 	pub upright_screen_fix: bool,
 
-	#[serde(default = "def_false")]
+	#[serde(default)]
 	pub double_cursor_fix: bool,
 
-	#[serde(default = "def_false")]
+	#[serde(default = "def_true")]
+	pub enable_watch: bool,
+
+	#[serde(default)]
 	pub sets_on_watch: bool,
 
-	#[serde(default = "def_false")]
+	#[serde(default)]
 	pub hide_grab_help: bool,
 
 	#[serde(default)]
@@ -285,22 +399,19 @@ pub struct GeneralConfig {
 	#[serde(default)]
 	pub capture_method: CaptureMethod,
 
-	#[serde(default = "def_point7")]
-	pub xr_click_sensitivity: f32,
-
-	#[serde(default = "def_half")]
-	pub xr_click_sensitivity_release: f32,
+	#[serde(default)]
+	pub input_emulation_method: InputEmulationMethod,
 
 	#[serde(default = "def_true")]
 	pub allow_sliding: bool,
 
-	#[serde(default = "def_false")]
+	#[serde(default)]
 	pub focus_follows_mouse_mode: bool,
 
-	#[serde(default = "def_false")]
+	#[serde(default)]
 	pub left_handed_mouse: bool,
 
-	#[serde(default = "def_false")]
+	#[serde(default)]
 	pub block_game_input: bool,
 
 	#[serde(default = "def_true")]
@@ -312,10 +423,7 @@ pub struct GeneralConfig {
 	#[serde(default = "def_one")]
 	pub space_drag_multiplier: f32,
 
-	#[serde(default = "def_one")]
-	pub space_fling_multiplier: f32,
-
-	#[serde(default = "def_empty")]
+	#[serde(default)]
 	pub skybox_texture: Arc<str>,
 
 	#[serde(default = "def_true")]
@@ -327,7 +435,7 @@ pub struct GeneralConfig {
 	#[serde(default = "def_max_height")]
 	pub screen_max_height: u16,
 
-	#[serde(default = "def_false")]
+	#[serde(default)]
 	pub screen_render_down: bool,
 
 	#[serde(default = "def_point3")]
@@ -336,8 +444,29 @@ pub struct GeneralConfig {
 	#[serde(default = "def_true")]
 	pub space_drag_unlocked: bool,
 
-	#[serde(default = "def_false")]
+	#[serde(default)]
+	pub space_drag_affects_world: bool,
+
+	#[serde(default)]
 	pub space_rotate_unlocked: bool,
+
+	#[serde(default)]
+	pub space_gravity_enabled: bool,
+
+	#[serde(default = "def_one")]
+	pub space_gravity_gravity: f32,
+
+	#[serde(default = "def_one")]
+	pub space_gravity_damping: f32,
+
+	#[serde(default = "def_one")]
+	pub space_gravity_fling_strength: f32,
+
+	#[serde(default = "def_one")]
+	pub space_gravity_ground_friction: f32,
+
+	#[serde(default)]
+	pub space_gravity_floor_height: f32,
 
 	#[serde(default)]
 	pub alt_click_down: Vec<String>,
@@ -348,17 +477,25 @@ pub struct GeneralConfig {
 	#[serde(default = "def_timezones")]
 	pub timezones: Vec<String>,
 
-	#[serde(default = "def_false")]
+	#[serde(default)]
 	pub clock_12h: bool,
 
 	#[serde(default)]
 	pub sets: Vec<SerializedWindowSet>,
 
 	#[serde(default)]
+	/// Obsolete, only used for reading
+	/// Use `sets` with `name: "global"`
 	pub global_set: SerializedWindowStates,
 
 	#[serde(default)]
+	pub spawn_overlays: Vec<Arc<str>>,
+
+	#[serde(default)]
 	pub autostart_apps: Vec<WvrProcessLaunchParams>,
+
+	#[serde(default)]
+	pub pinned_apps: Vec<PinnedApp>,
 
 	#[serde(default)]
 	pub last_set: u32,
@@ -381,9 +518,42 @@ pub struct GeneralConfig {
 	#[serde(default)]
 	pub handsfree_pointer: HandsfreePointer,
 
+	#[serde(default)]
+	pub handsfree_alt_tab: HandsfreeAltTab,
+
 	#[serde(default = "def_one")]
 	pub grid_opacity: f32,
 
 	#[serde(default)]
 	pub chroma_key_params: ChromaKeyParams,
+
+	#[serde(default)]
+	pub tutorial_graduated: bool,
+
+	#[serde(default)]
+	pub whisper_model: Arc<str>,
+
+	#[serde(default = "def_default")]
+	pub color_palette: Arc<str>,
+
+	#[serde(default)]
+	pub snap_angle_deg: f32,
+
+	#[serde(default = "def_true")]
+	pub wvr_mouse_acceleration: bool,
+
+	#[serde(default)]
+	pub wvr_mouse_speed: f32,
+
+	#[serde(default)]
+	pub wvr_input_capture: InputCaptureMethod,
+
+	#[serde(default)]
+	pub default_positioning: DefaultPositioning,
+
+	#[serde(default = "def_one")]
+	pub default_opacity: f32,
+
+	#[serde(default = "def_point15")]
+	pub default_curvature: f32,
 }

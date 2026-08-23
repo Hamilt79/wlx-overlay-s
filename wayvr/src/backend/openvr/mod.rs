@@ -12,12 +12,13 @@ use ovr_overlay::{
 };
 use smallvec::smallvec;
 use vulkano::{Handle, VulkanObject, device::physical::PhysicalDevice};
-use wlx_common::overlays::ToastTopic;
+use wgui::i18n::Translation;
+use wlx_common::{dash_interface::InterfaceFeats, overlays::ToastTopic};
 
 use crate::{
-    FRAME_COUNTER, RUNNING,
+    Args, FRAME_COUNTER, RUNNING, XrBackend,
     backend::{
-        BackendError, XrBackend,
+        BackendError, RunParams,
         input::interact,
         openvr::{
             helpers::adjust_gain,
@@ -32,7 +33,6 @@ use crate::{
     graphics::{GpuFutures, init_openvr_graphics},
     overlays::toast::Toast,
     state::AppState,
-    subsystem::notifications::NotificationManager,
     windowing::{
         backend::{RenderResources, RenderTarget, ShouldRender},
         manager::OverlayWindowManager,
@@ -58,14 +58,12 @@ pub fn openvr_uninstall() {
 }
 
 #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
-pub fn openvr_run(
-    show_by_default: bool,
-    headless: bool,
-    no_autostart: bool,
-) -> Result<(), BackendError> {
+pub fn openvr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
     let app_type = EVRApplicationType::VRApplication_Overlay;
     let Ok(context) = ovr_overlay::Context::init(app_type) else {
-        log::warn!("Will not use OpenVR: Context init failed");
+        if !args.wait {
+            log::warn!("Will not use OpenVR: Context init failed");
+        }
         return Err(BackendError::NotSupported);
     };
 
@@ -90,14 +88,17 @@ pub fn openvr_run(
         names.iter().map(std::string::String::as_str).collect()
     };
 
+    let feats = InterfaceFeats::default_for_backend(XrBackend::OpenVR);
+
     let mut app = {
         let (gfx, gfx_extras) = init_openvr_graphics(instance_extensions, device_extensions_fn)?;
-        AppState::from_graphics(gfx, gfx_extras, XrBackend::OpenVR)?
+        AppState::from_graphics(gfx, gfx_extras, feats, params)?
     };
 
-    app.session.no_autostart = no_autostart;
+    app.session.no_autostart = args.no_autostart;
 
-    if show_by_default {
+    if args.show {
+        app.session.config.tutorial_graduated = true;
         app.tasks.enqueue_at(
             TaskType::Overlay(OverlayTask::ShowHide),
             Instant::now().add(Duration::from_secs(1)),
@@ -112,12 +113,13 @@ pub fn openvr_run(
         log::info!("IPD: {:.0} mm", app.input_state.ipd);
     }
 
-    let _ = install_manifest(&mut app_mgr);
+    app.late_init();
 
-    let mut overlays = OverlayWindowManager::<OpenVrOverlayData>::new(&mut app, headless)?;
-    let mut notifications = NotificationManager::new();
-    notifications.run_dbus(&mut app.dbus);
-    notifications.run_udp();
+    if args.install {
+        let _ = install_manifest(&mut app_mgr);
+    }
+
+    let mut overlays = OverlayWindowManager::<OpenVrOverlayData>::new(&mut app, args.headless)?;
 
     let mut playspace = playspace::PlayspaceMover::new();
     playspace.playspace_changed(&mut compositor_mgr, &mut chaperone_mgr);
@@ -146,8 +148,12 @@ pub fn openvr_run(
     let mut lines = LinePool::new(app.gfx.clone())?;
     let pointer_lines = [lines.allocate(), lines.allocate()];
     let mut current_lines = Vec::with_capacity(2);
+    let mut last_frame_time = Instant::now();
 
     'main_loop: loop {
+        let now = Instant::now();
+        app.delta_time = (now.duration_since(last_frame_time).as_secs_f32()).clamp(0.001, 0.2); // 5 - 1000 fps
+        last_frame_time = now;
         let _ = overlay_mgr.wait_frame_sync(frame_timeout);
 
         if !RUNNING.load(Ordering::Relaxed) {
@@ -190,8 +196,8 @@ pub fn openvr_run(
                                 log::info!("IPD: {:.1} mm -> {:.1} mm", app.input_state.ipd, ipd);
                                 Toast::new(
                                     ToastTopic::IpdChange,
-                                    "IPD".into(),
-                                    format!("{ipd:.1} mm"),
+                                    Some(Translation::from_raw_text("IPD")),
+                                    Translation::from_raw_text_string(format!("{ipd:.1} mm")),
                                 )
                                 .submit(&mut app);
                             }
@@ -211,13 +217,14 @@ pub fn openvr_run(
             next_device_update = Instant::now() + Duration::from_secs(30);
         }
 
-        app.dbus.tick();
-        notifications.submit_pending(&mut app);
-
+        app.tick();
         app.tasks.retrieve_due(&mut due_tasks);
 
         while let Some(task) = due_tasks.pop_front() {
             match task {
+                TaskType::Global(task) => {
+                    task(&mut app);
+                }
                 TaskType::Input(task) => {
                     app.input_state.handle_task(task);
                 }
@@ -225,7 +232,7 @@ pub fn openvr_run(
                     overlays.handle_task(&mut app, task)?;
                 }
                 TaskType::Playspace(task) => {
-                    playspace.handle_task(&app, &mut chaperone_mgr, task);
+                    playspace.handle_task(&mut app, &mut chaperone_mgr, &mut overlays, task);
                 }
                 TaskType::OpenVR(task) => match task {
                     OpenVrTask::ColorGain(channel, value) => {
@@ -244,7 +251,13 @@ pub fn openvr_run(
         let universe = playspace.get_universe();
 
         app.input_state.pre_update();
-        input_source.update(universe.clone(), &mut input_mgr, &mut system_mgr, &mut app);
+        input_source.update(
+            universe.clone(),
+            &mut input_mgr,
+            &mut overlay_mgr,
+            &mut system_mgr,
+            &mut app,
+        );
         app.input_state.post_update(&app.session);
 
         if app
@@ -269,7 +282,7 @@ pub fn openvr_run(
 
         overlays.values_mut().for_each(|o| o.config.tick(&mut app));
 
-        playspace.update(&mut chaperone_mgr, &mut overlays, &app);
+        playspace.update(&mut chaperone_mgr, &mut overlays, &mut app);
 
         current_lines.clear();
 

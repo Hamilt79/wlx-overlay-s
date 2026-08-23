@@ -119,7 +119,7 @@ impl Color {
 	}
 
 	#[must_use]
-	pub fn add_rgb(&self, n: f32) -> Self {
+	pub const fn add_rgb(&self, n: f32) -> Self {
 		Self {
 			r: self.r + n,
 			g: self.g + n,
@@ -129,7 +129,7 @@ impl Color {
 	}
 
 	#[must_use]
-	pub fn mult_rgb(&self, n: f32) -> Self {
+	pub const fn mult_rgb(&self, n: f32) -> Self {
 		Self {
 			r: self.r * n,
 			g: self.g * n,
@@ -139,7 +139,7 @@ impl Color {
 	}
 
 	#[must_use]
-	pub fn lerp(&self, other: &Self, n: f32) -> Self {
+	pub const fn lerp(&self, other: &Self, n: f32) -> Self {
 		Self {
 			r: self.r * (1.0 - n) + other.r * n,
 			g: self.g * (1.0 - n) + other.g * n,
@@ -191,6 +191,58 @@ impl Color {
 	pub const fn as_arr(&self) -> [f32; 4] {
 		[self.r, self.b, self.g, self.a]
 	}
+
+	// expects strings like "#424242" or "#424242FF"
+	pub const fn from_hex(html_hex: &str) -> Option<drawing::Color> {
+		const fn hex_nibble(byte: u8) -> Option<u8> {
+			match byte {
+				b'0'..=b'9' => Some(byte - b'0'),
+				b'a'..=b'f' => Some(byte - b'a' + 10),
+				b'A'..=b'F' => Some(byte - b'A' + 10),
+				_ => None,
+			}
+		}
+
+		const fn hex_byte(high: u8, low: u8) -> Option<u8> {
+			let Some(high) = hex_nibble(high) else { return None };
+			let Some(low) = hex_nibble(low) else { return None };
+			Some((high << 4) | low)
+		}
+
+		let bytes = html_hex.as_bytes();
+
+		if (bytes.len() != 7 && bytes.len() != 9) || bytes[0] != b'#' {
+			return None;
+		}
+
+		let Some(r) = hex_byte(bytes[1], bytes[2]) else {
+			return None;
+		};
+
+		let Some(g) = hex_byte(bytes[3], bytes[4]) else {
+			return None;
+		};
+
+		let Some(b) = hex_byte(bytes[5], bytes[6]) else {
+			return None;
+		};
+
+		let a = if bytes.len() == 9 {
+			match hex_byte(bytes[7], bytes[8]) {
+				Some(value) => value,
+				None => return None,
+			}
+		} else {
+			255
+		};
+
+		Some(drawing::Color::new(
+			r as f32 / 255.0,
+			g as f32 / 255.0,
+			b as f32 / 255.0,
+			a as f32 / 255.0,
+		))
+	}
 }
 
 impl Default for Color {
@@ -207,6 +259,7 @@ pub struct HsvColor {
 	pub a: f32,
 }
 
+#[allow(clippy::many_single_char_names)]
 impl HsvColor {
 	pub const fn new(h: f32, s: f32, v: f32, a: f32) -> Self {
 		Self { h, s, v, a }
@@ -288,6 +341,7 @@ pub struct Rectangle {
 pub struct ImagePrimitive {
 	pub content: CustomGlyphData,
 	pub content_key: usize,
+	pub skip_cache: bool,
 
 	pub border: f32, // width in pixels
 	pub border_color: Color,

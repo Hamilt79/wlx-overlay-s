@@ -1,4 +1,5 @@
 pub mod input;
+pub mod playspace_common;
 
 #[cfg(feature = "openvr")]
 pub mod openvr;
@@ -13,12 +14,8 @@ pub mod set;
 pub mod task;
 
 use thiserror::Error;
-
-#[derive(Clone, Copy)]
-pub enum XrBackend {
-    OpenXR,
-    OpenVR,
-}
+use wgui::globals::WguiGlobals;
+use wlx_common::config::GeneralConfig;
 
 #[derive(Error, Debug)]
 pub enum BackendError {
@@ -35,4 +32,9 @@ pub enum BackendError {
     Restart,
     #[error("Fatal: {0:?}")]
     Fatal(#[from] anyhow::Error),
+}
+
+pub struct RunParams {
+    pub wgui_globals: WguiGlobals,
+    pub config: GeneralConfig,
 }

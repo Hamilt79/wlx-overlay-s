@@ -1,3 +1,5 @@
+use strum::{EnumIs, EnumString};
+
 pub mod astr_containers;
 pub mod async_executor;
 pub mod audio;
@@ -7,9 +9,26 @@ pub mod config;
 pub mod config_io;
 pub mod dash_interface;
 pub mod dash_interface_emulated;
+pub mod data_dir;
 pub mod desktop_finder;
-mod handle;
 pub mod locale;
+pub mod openxr_actions;
+pub mod openxr_bindings_schema;
+pub mod openxr_controller_profiles;
 pub mod overlays;
+pub mod palette;
 pub mod timestep;
 pub mod windowing;
+
+#[derive(Clone, Copy, EnumIs, EnumString, PartialEq, Eq)]
+pub enum XrBackend {
+	OpenXR,
+	OpenVR,
+}
+
+#[derive(Clone, Copy, EnumIs, EnumString, PartialEq, Eq)]
+pub enum DesktopBackend {
+	Headless,
+	Wayland,
+	X11,
+}

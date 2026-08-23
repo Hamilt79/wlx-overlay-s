@@ -8,18 +8,20 @@ authors = ["galister", "oo8dev"]
 repository = "https://github.com/wlx-team/wayvr"
 
 [dependencies]
-bytes = "1.11.1"
-smallvec = "1.13.2"
+anyhow.workspace = true
+async-channel.workspace = true
+async-io.workspace = true
+bytes.workspace = true
+interprocess.workspace = true
+log.workspace = true
 serde.workspace = true
-anyhow = "1.0.93"
-log = "0.4.22"
+slotmap.workspace = true
+smallvec.workspace = true
 
 # client-only deps
-interprocess = { version = "2.2.2", features = ["tokio"], optional = true }
-tokio = { version = "1.43.1", features = ["macros"], optional = true }
-tokio-util = { version = "0.7.13", optional = true }
 serde_json.workspace = true
+smol = { workspace = true, optional = true }
 
 [features]
 default = ["client"]
-client = ["dep:tokio", "dep:tokio-util", "dep:interprocess"]
+client = ["dep:smol"]

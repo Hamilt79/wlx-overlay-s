@@ -6,6 +6,10 @@ mod component_editbox;
 mod component_radio_group;
 mod component_slider;
 mod component_tabs;
+
+#[cfg(feature = "video")]
+mod component_video;
+
 mod helpers;
 mod style;
 mod widget_div;
@@ -15,9 +19,8 @@ mod widget_rectangle;
 mod widget_sprite;
 
 use crate::{
-	assets::{AssetPath, AssetPathOwned, normalize_path},
+	assets::{AssetPath, AssetPathOwned, AssetPathRc, normalize_path},
 	components::{Component, ComponentWeak},
-	drawing::{self},
 	globals::WguiGlobals,
 	i18n::Translation,
 	layout::{Layout, LayoutParams, LayoutState, Widget, WidgetID, WidgetMap, WidgetPair},
@@ -59,10 +62,13 @@ pub struct Template {
 	node: roxmltree::NodeId, // belongs to node_document which could be included in another file
 }
 
+#[derive(Clone, Default)]
+pub struct TemplateParams(HashMap<Rc<str>, Rc<str>>);
+
 struct ParserFile {
 	path: AssetPathOwned,
 	document: Rc<XmlDocument>,
-	template_parameters: HashMap<Rc<str>, Rc<str>>,
+	template_parameters: TemplateParams,
 }
 
 /*
@@ -73,7 +79,6 @@ struct ParserFile {
 #[derive(Default, Clone)]
 pub struct ParserData {
 	pub components_by_id: HashMap<Rc<str>, ComponentWeak>,
-	pub components_by_widget_id: HashMap<WidgetID, ComponentWeak>,
 	pub components: Vec<Component>,
 	pub ids: HashMap<Rc<str>, WidgetID>,
 	pub templates: HashMap<Rc<str>, Rc<Template>>,
@@ -85,14 +90,18 @@ pub trait Fetchable {
 	/// Return a component by its string ID
 	fn fetch_component_by_id(&self, id: &str) -> anyhow::Result<Component>;
 
-	/// Return a component by the ID of the widget that owns it
-	fn fetch_component_by_widget_id(&self, widget_id: WidgetID) -> anyhow::Result<Component>;
+	/// Fetch a component by widget ID (returns Component)
+	fn fetch_component_by_widget_id(&self, state: &LayoutState, widget_id: WidgetID) -> anyhow::Result<Component>;
 
 	/// Fetch a component by string ID and down‑cast it to a concrete component type `T` (see `components/mod.rs`)
 	fn fetch_component_as<T: 'static>(&self, id: &str) -> anyhow::Result<Rc<T>>;
 
 	/// Fetch a component by widget ID and down‑cast it to a concrete component type `T` (see `components/mod.rs`)
-	fn fetch_component_from_widget_id_as<T: 'static>(&self, widget_id: WidgetID) -> anyhow::Result<Rc<T>>;
+	fn fetch_component_from_widget_id_as<T: 'static>(
+		&self,
+		state: &LayoutState,
+		widget_id: WidgetID,
+	) -> anyhow::Result<Rc<T>>;
 
 	/// Return a widget by its string ID
 	fn get_widget_id(&self, id: &str) -> anyhow::Result<WidgetID>;
@@ -104,12 +113,33 @@ pub trait Fetchable {
 	fn fetch_widget_as<'a, T: 'static>(&self, state: &'a LayoutState, id: &str) -> anyhow::Result<RefMut<'a, T>>;
 }
 
+impl TemplateParams {
+	pub fn new() -> Self {
+		Self(HashMap::new())
+	}
+
+	pub const fn from_hashmap(map: HashMap<Rc<str>, Rc<str>>) -> Self {
+		Self(map)
+	}
+
+	pub fn insert(&mut self, key: &str, value: &str) -> Option<Rc<str>> {
+		self.0.insert(Rc::from(key), Rc::from(value))
+	}
+
+	pub fn insert_rc(&mut self, key: &str, value: Rc<str>) -> Option<Rc<str>> {
+		self.0.insert(Rc::from(key), value)
+	}
+
+	pub fn insert_str(&mut self, key: &str, value: String) -> Option<Rc<str>> {
+		self.0.insert(Rc::from(key), value.into())
+	}
+}
+
 impl ParserData {
 	pub(crate) fn take_results_from(&mut self, from: &mut Self) {
 		let ids = std::mem::take(&mut from.ids);
 		let components = std::mem::take(&mut from.components);
 		let components_by_id = std::mem::take(&mut from.components_by_id);
-		let components_by_widget_id = std::mem::take(&mut from.components_by_widget_id);
 
 		for (id, key) in ids {
 			self.ids.insert(id, key);
@@ -121,10 +151,6 @@ impl ParserData {
 
 		for (k, v) in components_by_id {
 			self.components_by_id.insert(k, v);
-		}
-
-		for (k, v) in components_by_widget_id {
-			self.components_by_widget_id.insert(k, v);
 		}
 	}
 }
@@ -142,16 +168,16 @@ impl Fetchable for ParserData {
 		Ok(Component(component))
 	}
 
-	fn fetch_component_by_widget_id(&self, widget_id: WidgetID) -> anyhow::Result<Component> {
-		let Some(weak) = self.components_by_widget_id.get(&widget_id) else {
-			anyhow::bail!("Component by widget ID \"{widget_id:?}\" doesn't exist");
-		};
+	fn fetch_component_by_widget_id(&self, state: &LayoutState, widget_id: WidgetID) -> anyhow::Result<Component> {
+		state.fetch_component_by_widget_id(widget_id)
+	}
 
-		let Some(component) = weak.upgrade() else {
-			anyhow::bail!("Component by widget ID \"{widget_id:?}\" has disappeared");
-		};
-
-		Ok(Component(component))
+	fn fetch_component_from_widget_id_as<T: 'static>(
+		&self,
+		state: &LayoutState,
+		widget_id: WidgetID,
+	) -> anyhow::Result<Rc<T>> {
+		state.fetch_component_from_widget_id_as(widget_id)
 	}
 
 	fn fetch_component_as<T: 'static>(&self, id: &str) -> anyhow::Result<Rc<T>> {
@@ -159,17 +185,6 @@ impl Fetchable for ParserData {
 
 		if !(*component.0).as_any().is::<T>() {
 			anyhow::bail!("fetch_component_as({id}): type not matching");
-		}
-
-		// safety: we just checked the type
-		unsafe { Ok(Rc::from_raw(Rc::into_raw(component.0).cast())) }
-	}
-
-	fn fetch_component_from_widget_id_as<T: 'static>(&self, widget_id: WidgetID) -> anyhow::Result<Rc<T>> {
-		let component = self.fetch_component_by_widget_id(widget_id)?;
-
-		if !(*component.0).as_any().is::<T>() {
-			anyhow::bail!("fetch_component_by_widget_id({widget_id:?}): type not matching");
 		}
 
 		// safety: we just checked the type
@@ -225,14 +240,14 @@ impl ParserState {
 	/// but it keeps components data in this `ParserState` object for you.
 	/// The result can be safely dropped, all required event listeners and components
 	/// will be kept intact in this `ParserState`.
-	/// Resulting ParserData::components Vec will be left empty (they are moved into this `ParserState::data`)
+	/// Resulting `ParserData::components` Vec will be left empty (they are moved into this `ParserState::data`)
 	pub fn realize_template(
 		&mut self,
 		doc_params: &ParseDocumentParams,
 		template_name: &str,
 		layout: &mut Layout,
 		widget_id: WidgetID,
-		template_parameters: HashMap<Rc<str>, Rc<str>>,
+		template_parameters: TemplateParams,
 	) -> anyhow::Result<ParserData> {
 		let mut parser_data =
 			self.parse_template_only(doc_params, template_name, layout, widget_id, template_parameters)?;
@@ -245,7 +260,7 @@ impl ParserState {
 	/// Semi-internal - This function is suitable in cases if you don't want to pollute
 	/// the main parser state state with dynamic IDs (this won't propagate components!)
 	/// Use `realize_template` (or in some rare cases: `instantiate_template`) instead unless you want to handle `components` results yourself.
-	/// Make sure not to drop resulting ParserData if you want to have your listener handles valid
+	/// Make sure not to drop resulting `ParserData` if you want to have your listener handles valid
 	/// (they are contained in components). Use `realize_template` instead if you don't want to think about it.
 	pub fn parse_template_only(
 		&self,
@@ -253,7 +268,7 @@ impl ParserState {
 		template_name: &str,
 		layout: &mut Layout,
 		widget_id: WidgetID,
-		template_parameters: HashMap<Rc<str>, Rc<str>>,
+		template_parameters: TemplateParams,
 	) -> anyhow::Result<ParserData> {
 		let Some(template) = self.data.templates.get(template_name) else {
 			anyhow::bail!(
@@ -282,7 +297,7 @@ impl ParserState {
 	/// Parse named <template> tag and process it.
 	/// Instantiate template by saving all the results into the main `ParserState`.
 	/// Be aware you this function will save ALL parsed IDs and other metadata
-	/// into your main ParserState context (deep move).
+	/// into your main `ParserState` context (deep move).
 	/// You shouldn't instantiate the same template twice, to prevent ID name clash.
 	/// Consider using `parse_template_only` or `realize_template` instead if you want
 	/// to instantiate more than a single template of the same type.
@@ -292,7 +307,7 @@ impl ParserState {
 		template_name: &str,
 		layout: &mut Layout,
 		widget_id: WidgetID,
-		template_parameters: HashMap<Rc<str>, Rc<str>>,
+		template_parameters: TemplateParams,
 	) -> anyhow::Result<()> {
 		let mut data_local = self.parse_template_only(doc_params, template_name, layout, widget_id, template_parameters)?;
 
@@ -303,7 +318,7 @@ impl ParserState {
 	pub(crate) fn context_menu_parse_cells(
 		&mut self,
 		template_name: &str,
-		template_params: &HashMap<Rc<str>, Rc<str>>,
+		template_params: &TemplateParams,
 	) -> anyhow::Result<Vec<context_menu::Cell>> {
 		let Some(template) = self.data.templates.get(template_name) else {
 			anyhow::bail!("no template named \"{template_name}\" found");
@@ -319,7 +334,7 @@ impl ParserState {
 
 		let mut cells = Vec::<context_menu::Cell>::new();
 
-		for child in el_context_menu.children() {
+		'children: for child in el_context_menu.children() {
 			match child.tag_name().name() {
 				"" => {}
 				"cell" => {
@@ -337,6 +352,13 @@ impl ParserState {
 							"tooltip" => tooltip = Some(Translation::from_translation_key(value)),
 							"tooltip_str" => tooltip = Some(Translation::from_raw_text(value)),
 							"action" => action_name = Some(value.into()),
+							"skip" => {
+								let resolved = replace_vars(value, template_params);
+								//FIXME: this is always empty
+								if &*resolved == "1" {
+									continue 'children;
+								}
+							}
 							other => {
 								if !other.starts_with('_') {
 									anyhow::bail!("unexpected \"{other}\" attribute");
@@ -370,16 +392,20 @@ impl Fetchable for ParserState {
 		self.data.fetch_component_by_id(id)
 	}
 
-	fn fetch_component_by_widget_id(&self, widget_id: WidgetID) -> anyhow::Result<Component> {
-		self.data.fetch_component_by_widget_id(widget_id)
+	fn fetch_component_by_widget_id(&self, state: &LayoutState, widget_id: WidgetID) -> anyhow::Result<Component> {
+		self.data.fetch_component_by_widget_id(state, widget_id)
+	}
+
+	fn fetch_component_from_widget_id_as<T: 'static>(
+		&self,
+		state: &LayoutState,
+		widget_id: WidgetID,
+	) -> anyhow::Result<Rc<T>> {
+		self.data.fetch_component_from_widget_id_as(state, widget_id)
 	}
 
 	fn fetch_component_as<T: 'static>(&self, id: &str) -> anyhow::Result<Rc<T>> {
 		self.data.fetch_component_as(id)
-	}
-
-	fn fetch_component_from_widget_id_as<T: 'static>(&self, widget_id: WidgetID) -> anyhow::Result<Rc<T>> {
-		self.data.fetch_component_from_widget_id_as(widget_id)
 	}
 
 	fn get_widget_id(&self, id: &str) -> anyhow::Result<WidgetID> {
@@ -471,7 +497,8 @@ impl ParserContext<'_> {
 
 	fn insert_component(&mut self, widget_id: WidgetID, component: Component, id: Option<Rc<str>>) {
 		self
-			.data_local
+			.layout
+			.state
 			.components_by_widget_id
 			.insert(widget_id, component.weak());
 
@@ -494,29 +521,10 @@ impl ParserContext<'_> {
 		}
 	}
 
-	fn populate_theme_variables(&mut self) {
-		let theme = self.layout.state.theme.clone();
-
-		macro_rules! insert_color_vars {
-			($self:expr, $name:literal, $field:expr, $alpha:expr) => {
-				$self.insert_var(concat!("color_", $name), &$field.to_hex());
-				$self.insert_var(
-					concat!("color_", $name, "_translucent"),
-					&$field.with_alpha($alpha).to_hex(),
-				);
-				$self.insert_var(concat!("color_", $name, "_50"), &$field.mult_rgb(0.50).to_hex());
-				$self.insert_var(concat!("color_", $name, "_40"), &$field.mult_rgb(0.40).to_hex());
-				$self.insert_var(concat!("color_", $name, "_30"), &$field.mult_rgb(0.30).to_hex());
-				$self.insert_var(concat!("color_", $name, "_20"), &$field.mult_rgb(0.20).to_hex());
-				$self.insert_var(concat!("color_", $name, "_10"), &$field.mult_rgb(0.10).to_hex());
-			};
+	fn populate_extra_variables(&mut self, other: &HashMap<Rc<str>, Rc<str>>) {
+		for (k, v) in other {
+			self.data_local.var_map.insert(k.clone(), v.clone());
 		}
-
-		insert_color_vars!(self, "text", theme.text_color, theme.translucent_alpha);
-		insert_color_vars!(self, "accent", theme.accent_color, theme.translucent_alpha);
-		insert_color_vars!(self, "danger", theme.danger_color, theme.translucent_alpha);
-		insert_color_vars!(self, "faded", theme.faded_color, theme.translucent_alpha);
-		insert_color_vars!(self, "bg", theme.bg_color, theme.translucent_alpha);
 	}
 
 	fn print_invalid_attrib(&self, tag_name: &str, key: &str, value: &str) {
@@ -559,6 +567,10 @@ impl ParserContext<'_> {
 			return None;
 		};
 		Some(val / 100.0)
+	}
+
+	pub fn parse_auto(value: &str) -> bool {
+		value.contains("auto")
 	}
 
 	fn parse_size_unit<T>(&self, tag_name: &str, key: &str, value: &str) -> Option<T>
@@ -605,38 +617,6 @@ fn is_percent(value: &str) -> bool {
 	value.ends_with('%')
 }
 
-// Parses a color from a HTML hex string
-pub fn parse_color_hex(html_hex: &str) -> Option<drawing::Color> {
-	if html_hex.len() == 7 {
-		if let (Ok(r), Ok(g), Ok(b)) = (
-			u8::from_str_radix(&html_hex[1..3], 16),
-			u8::from_str_radix(&html_hex[3..5], 16),
-			u8::from_str_radix(&html_hex[5..7], 16),
-		) {
-			return Some(drawing::Color::new(
-				f32::from(r) / 255.,
-				f32::from(g) / 255.,
-				f32::from(b) / 255.,
-				1.,
-			));
-		}
-	} else if html_hex.len() == 9
-		&& let (Ok(r), Ok(g), Ok(b), Ok(a)) = (
-			u8::from_str_radix(&html_hex[1..3], 16),
-			u8::from_str_radix(&html_hex[3..5], 16),
-			u8::from_str_radix(&html_hex[5..7], 16),
-			u8::from_str_radix(&html_hex[7..9], 16),
-		) {
-		return Some(drawing::Color::new(
-			f32::from(r) / 255.,
-			f32::from(g) / 255.,
-			f32::from(b) / 255.,
-			f32::from(a) / 255.,
-		));
-	}
-	None
-}
-
 fn get_tag_by_name<'a>(node: &roxmltree::Node<'a, 'a>, name: &str) -> Option<roxmltree::Node<'a, 'a>> {
 	node.children().find(|&child| child.tag_name().name() == name)
 }
@@ -647,7 +627,7 @@ fn require_tag_by_name<'a>(node: &roxmltree::Node<'a, 'a>, name: &str) -> anyhow
 
 fn parse_widget_other_internal(
 	template: &Rc<Template>,
-	template_parameters: HashMap<Rc<str>, Rc<str>>,
+	template_parameters: TemplateParams,
 	file: &ParserFile,
 	ctx: &mut ParserContext,
 	parent_id: WidgetID,
@@ -685,10 +665,16 @@ fn parse_widget_other(
 		return Ok(()); // not critical
 	};
 
-	let template_parameters: HashMap<Rc<str>, Rc<str>> =
+	let template_params: HashMap<Rc<str>, Rc<str>> =
 		attribs.iter().map(|a| (a.attrib.clone(), a.value.clone())).collect();
 
-	parse_widget_other_internal(&template, template_parameters, file, ctx, parent_id)
+	parse_widget_other_internal(
+		&template,
+		TemplateParams::from_hashmap(template_params),
+		file,
+		ctx,
+		parent_id,
+	)
 }
 
 fn parse_tag_include(
@@ -788,7 +774,7 @@ fn parse_tag_var<'a>(ctx: &mut ParserContext, tag_name: &str, node: roxmltree::N
 	ctx.insert_var(key, value);
 }
 
-pub fn replace_vars(input: &str, vars: &HashMap<Rc<str>, Rc<str>>) -> Rc<str> {
+pub fn replace_vars(input: &str, vars: &TemplateParams) -> Rc<str> {
 	let re = regex::Regex::new(r"\$\{([^}]*)\}").unwrap();
 
 	/*if !vars.is_empty() {
@@ -798,7 +784,7 @@ pub fn replace_vars(input: &str, vars: &HashMap<Rc<str>, Rc<str>>) -> Rc<str> {
 	let out = re.replace_all(input, |captures: &regex::Captures| {
 		let input_var = &captures[1];
 
-		if let Some(replacement) = vars.get(input_var) {
+		if let Some(replacement) = vars.0.get(input_var) {
 			replacement.clone()
 		} else {
 			// failed to find var, return an empty string
@@ -811,12 +797,7 @@ pub fn replace_vars(input: &str, vars: &HashMap<Rc<str>, Rc<str>>) -> Rc<str> {
 
 #[allow(clippy::manual_strip)]
 #[allow(clippy::single_match_else)]
-fn process_attrib(
-	template_parameters: &HashMap<Rc<str>, Rc<str>>,
-	ctx: &ParserContext,
-	key: &str,
-	value: &str,
-) -> AttribPair {
+fn process_attrib(template_parameters: &TemplateParams, ctx: &ParserContext, key: &str, value: &str) -> AttribPair {
 	if value.starts_with('~') {
 		let name = &value[1..];
 
@@ -824,7 +805,7 @@ fn process_attrib(
 			Some(name) => AttribPair::new(key, name),
 			None => {
 				log::warn!("{}: undefined variable \"{value}\"", ctx.doc_params.path.get_str());
-				AttribPair::new(key, "undefined")
+				AttribPair::new(key, format!("undefined_{value}"))
 			}
 		}
 	} else {
@@ -1007,24 +988,16 @@ fn parse_widget_universal(ctx: &mut ParserContext, widget: &WidgetPair, attribs:
 fn parse_child<'a>(
 	file: &ParserFile,
 	ctx: &mut ParserContext,
-	parent_node: roxmltree::Node<'a, 'a>,
 	child_node: roxmltree::Node<'a, 'a>,
 	parent_id: WidgetID,
 ) -> anyhow::Result<()> {
 	let tag_name = child_node.tag_name().name();
-	match parent_node.attribute("ignore_in_mode") {
-		Some("dev") => {
-			if !ctx.doc_params.extra.dev_mode {
-				return Ok(()); // do not parse
-			}
+	if let Some(skip) = child_node.attribute("skip") {
+		let resolved = process_attrib(&file.template_parameters, ctx, "skip", skip).value;
+		//FIXME: this is always empty
+		if &*resolved == "1" {
+			return Ok(()); // do not parse this element
 		}
-		Some("live") => {
-			if ctx.doc_params.extra.dev_mode {
-				return Ok(()); // do not parse
-			}
-		}
-		Some(s) => ctx.print_invalid_attrib(tag_name, "ignore_in_mode", s),
-		_ => {}
 	}
 
 	let attribs = process_attribs(file, ctx, &child_node, false);
@@ -1062,6 +1035,14 @@ fn parse_child<'a>(
 				file, ctx, child_node, parent_id, &attribs, tag_name,
 			)?);
 		}
+		#[cfg(feature = "video")]
+		"Video" => {
+			use crate::parser::component_video::parse_component_video;
+
+			new_widget_id = Some(parse_component_video(
+				file, ctx, child_node, parent_id, &attribs, tag_name,
+			)?);
+		}
 		"Slider" => {
 			new_widget_id = Some(parse_component_slider(ctx, parent_id, &attribs, tag_name)?);
 		}
@@ -1092,7 +1073,9 @@ fn parse_child<'a>(
 		"EditBox" => new_widget_id = Some(parse_component_editbox(ctx, parent_id, &attribs, tag_name)?),
 		"BarGraph" => new_widget_id = Some(parse_component_bar_graph(ctx, parent_id, &attribs, tag_name)?),
 		"Tabs" => {
-			new_widget_id = Some(parse_component_tabs(ctx, child_node, parent_id, &attribs, tag_name)?);
+			new_widget_id = Some(parse_component_tabs(
+				file, ctx, child_node, parent_id, &attribs, tag_name,
+			)?);
 		}
 		"" => { /* ignore */ }
 		other_tag_name => {
@@ -1133,7 +1116,7 @@ fn parse_children<'a>(
 	parent_id: WidgetID,
 ) -> anyhow::Result<()> {
 	for child_node in parent_node.children() {
-		parse_child(file, ctx, parent_node, child_node, parent_id)?;
+		parse_child(file, ctx, child_node, parent_id)?;
 	}
 
 	Ok(())
@@ -1233,6 +1216,7 @@ pub type OnCustomAttribsFunc = Rc<dyn Fn(CustomAttribsInfo)>;
 pub struct ParseDocumentExtra {
 	pub on_custom_attribs: Option<OnCustomAttribsFunc>, // all attributes with '_' character prepended
 	pub dev_mode: bool,
+	pub extra_vars: HashMap<Rc<str>, Rc<str>>,
 }
 
 // filled-in by you in `new_layout_from_assets` function
@@ -1249,7 +1233,7 @@ pub fn parse_from_assets(
 ) -> anyhow::Result<ParserState> {
 	let parser_data = ParserData::default();
 	let mut ctx = create_default_context(doc_params, layout, &parser_data);
-	ctx.populate_theme_variables();
+	ctx.populate_extra_variables(&doc_params.extra.extra_vars);
 
 	let (file, node_layout) = get_doc_from_asset_path(&ctx, doc_params.path)?;
 	parse_document_root(&file, &mut ctx, parent_id, node_layout)?;
@@ -1299,7 +1283,7 @@ fn get_doc_from_asset_path(
 	let file = ParserFile {
 		path: asset_path.to_owned(),
 		document: document.clone(),
-		template_parameters: Default::default(),
+		template_parameters: TemplateParams::new(),
 	};
 
 	Ok((file, tag_layout.id()))
@@ -1336,21 +1320,26 @@ fn parse_document_root(
 	Ok(())
 }
 
-fn get_asset_path_from_kv<'a>(prefix: &'static str, key: &'a str, value: &'a str) -> AssetPath<'a> {
-	let key_split = match key.find(prefix) {
-		Some(pos) => {
-			assert!(pos == 0, "invalid split");
-			key.get(prefix.len()..).unwrap()
-		}
-		None => key,
-	};
-	match key_split {
+fn get_asset_path_from_kv<'a>(prefix: &str, key: &'a str, value: &'a str) -> AssetPath<'a> {
+	let key = key.strip_prefix(prefix).unwrap_or(key);
+
+	match key {
 		"src" => AssetPath::FileOrBuiltIn(value),
 		"src_ext" => AssetPath::File(value),
 		"src_builtin" => AssetPath::BuiltIn(value),
 		"src_internal" => AssetPath::WguiInternal(value),
-		other => {
-			panic!("unexpected attrib {other}");
-		}
+		other => panic!("unexpected attrib {other}"),
+	}
+}
+
+fn get_asset_path_rc_from_kv(prefix: &'static str, key: &str, value: Rc<str>) -> AssetPathRc {
+	let key = key.strip_prefix(prefix).unwrap_or(key);
+
+	match key {
+		"src" => AssetPathRc::FileOrBuiltIn(value),
+		"src_ext" => AssetPathRc::File(value),
+		"src_builtin" => AssetPathRc::BuiltIn(value),
+		"src_internal" => AssetPathRc::WguiInternal(value),
+		other => panic!("unexpected attrib {other}"),
 	}
 }

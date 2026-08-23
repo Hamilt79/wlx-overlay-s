@@ -4,6 +4,7 @@ use anyhow::bail;
 use ovr_overlay::{
     TrackedDeviceIndex,
     input::{ActionHandle, ActionSetHandle, ActiveActionSet, InputManager, InputValueHandle},
+    overlay::OverlayManager,
     sys::{
         ETrackedControllerRole, ETrackedDeviceClass, ETrackedDeviceProperty,
         ETrackingUniverseOrigin,
@@ -148,6 +149,7 @@ impl OpenVrInputSource {
         &mut self,
         universe: ETrackingUniverseOrigin,
         input: &mut InputManager,
+        overlay: &mut OverlayManager,
         system: &mut SystemManager,
         app: &mut AppState,
     ) {
@@ -187,13 +189,15 @@ impl OpenVrInputSource {
         let _ = input.update_actions(&mut [aas_left, aas_right]);
 
         let devices = system.get_device_to_absolute_tracking_pose(universe.clone(), 0.005);
-        app.input_state.hmd = devices[0].mDeviceToAbsoluteTracking.to_affine();
+        if devices[0].bPoseIsValid {
+            app.input_state.hmd = devices[0].mDeviceToAbsoluteTracking.to_affine();
+        }
 
         for i in 0..2 {
             let hand = &mut self.hands[i];
             let app_hand = &mut app.input_state.pointers[i];
 
-            if let Some(device) = hand.device {
+            if let Some(device) = hand.device.filter(|_| !overlay.is_dashboard_visible()) {
                 app_hand.raw_pose = devices[device.0 as usize]
                     .mDeviceToAbsoluteTracking
                     .to_affine();
@@ -218,33 +222,27 @@ impl OpenVrInputSource {
 
             app_hand.now.click = input
                 .get_digital_action_data(self.click_hnd, hand.input_hnd)
-                .map(|x| x.0.bState)
-                .unwrap_or(false);
+                .is_ok_and(|x| x.0.bState);
 
             app_hand.now.grab = input
                 .get_digital_action_data(self.grab_hnd, hand.input_hnd)
-                .map(|x| x.0.bState)
-                .unwrap_or(false);
+                .is_ok_and(|x| x.0.bState);
 
             app_hand.now.alt_click = input
                 .get_digital_action_data(self.alt_click_hnd, hand.input_hnd)
-                .map(|x| x.0.bState)
-                .unwrap_or(false);
+                .is_ok_and(|x| x.0.bState);
 
             app_hand.now.show_hide = input
                 .get_digital_action_data(self.show_hide_hnd, hand.input_hnd)
-                .map(|x| x.0.bState)
-                .unwrap_or(false);
+                .is_ok_and(|x| x.0.bState);
 
             app_hand.now.toggle_dashboard = input
                 .get_digital_action_data(self.toggle_dashboard_hnd, hand.input_hnd)
-                .map(|x| x.0.bState)
-                .unwrap_or(false);
+                .is_ok_and(|x| x.0.bState);
 
             app_hand.now.space_drag = input
                 .get_digital_action_data(self.space_drag_hnd, hand.input_hnd)
-                .map(|x| x.0.bState)
-                .unwrap_or(false);
+                .is_ok_and(|x| x.0.bState);
 
             app_hand.now.space_fling = input
                 .get_digital_action_data(self.space_fling_hnd, hand.input_hnd)
@@ -253,33 +251,27 @@ impl OpenVrInputSource {
 
             app_hand.now.space_rotate = input
                 .get_digital_action_data(self.space_rotate_hnd, hand.input_hnd)
-                .map(|x| x.0.bState)
-                .unwrap_or(false);
+                .is_ok_and(|x| x.0.bState);
 
             app_hand.now.space_reset = input
                 .get_digital_action_data(self.space_reset_hnd, hand.input_hnd)
-                .map(|x| x.0.bState)
-                .unwrap_or(false);
+                .is_ok_and(|x| x.0.bState);
 
             app_hand.now.click_modifier_right = input
                 .get_digital_action_data(self.click_modifier_right_hnd, hand.input_hnd)
-                .map(|x| x.0.bState)
-                .unwrap_or(false);
+                .is_ok_and(|x| x.0.bState);
 
             app_hand.now.click_modifier_middle = input
                 .get_digital_action_data(self.click_modifier_middle_hnd, hand.input_hnd)
-                .map(|x| x.0.bState)
-                .unwrap_or(false);
+                .is_ok_and(|x| x.0.bState);
 
             app_hand.now.move_mouse = input
                 .get_digital_action_data(self.move_mouse_hnd, hand.input_hnd)
-                .map(|x| x.0.bState)
-                .unwrap_or(false);
+                .is_ok_and(|x| x.0.bState);
 
             let scroll = input
                 .get_analog_action_data(self.scroll_hnd, hand.input_hnd)
-                .map(|x| (x.0.x, x.0.y))
-                .unwrap_or((0.0, 0.0));
+                .map_or((0.0, 0.0), |x| (x.0.x, x.0.y));
             app_hand.now.scroll_x = scroll.0;
             app_hand.now.scroll_y = scroll.1;
         }
@@ -339,6 +331,17 @@ fn get_tracked_device(
     index: TrackedDeviceIndex,
     role: TrackedDeviceRole,
 ) -> Option<TrackedDevice> {
+    let provides_battery = system
+        .get_tracked_device_property(
+            index,
+            ETrackedDeviceProperty::Prop_DeviceProvidesBatteryStatus_Bool,
+        )
+        .unwrap_or(false);
+    if !provides_battery {
+        // don't show devices that don't have battery info
+        return None;
+    }
+
     let soc = system
         .get_tracked_device_property(
             index,
@@ -360,8 +363,7 @@ fn get_tracked_device(
             index,
             ETrackedDeviceProperty::Prop_TrackingSystemName_String,
         )
-        .map(|x: String| x.contains("ALVR"))
-        .unwrap_or(false);
+        .is_ok_and(|x: String| x.contains("ALVR"));
 
     if is_alvr {
         // don't show ALVR's fake trackers on battery panel

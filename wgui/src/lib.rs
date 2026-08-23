@@ -26,6 +26,7 @@ pub mod animation;
 pub mod any;
 pub mod assets;
 mod assets_internal;
+pub mod color;
 pub mod components;
 pub mod drawing;
 pub mod event;
@@ -35,14 +36,19 @@ pub mod globals;
 pub mod i18n;
 pub mod layout;
 pub mod log;
+pub mod palette;
 pub mod parser;
 pub mod renderer_vk;
 pub mod sound;
 pub mod stack;
 pub mod task;
 pub mod theme;
+pub mod time;
 pub mod widget;
 pub mod windowing;
+
+#[cfg(feature = "video")]
+pub mod video_dec;
 
 // re-exported libs
 pub use cosmic_text;

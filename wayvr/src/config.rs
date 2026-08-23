@@ -1,13 +1,17 @@
 use config::{Config, File};
 use log::error;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use wayvr_ipc::packet_client::WvrProcessLaunchParams;
 use wlx_common::{
     astr_containers::AStrMap,
     config::{
-        AltModifier, CaptureMethod, ChromaKeyParams, GeneralConfig, HandsfreePointer,
-        SerializedWindowSet, SerializedWindowStates,
+        AltModifier, CaptureMethod, ChromaKeyParams, DefaultPositioning, GeneralConfig,
+        HandsfreeAltTab, HandsfreePointer, InputCaptureMethod, InputEmulationMethod, PinnedApp,
+        SerializedWindowSet,
     },
     config_io,
     locale::Language,
@@ -45,6 +49,32 @@ where
     panic!("No usable config found.");
 }
 
+const SUPPORTED_EXTESIONS: [&str; 4] = ["yaml", "yml", "json", "json5"];
+
+fn is_supported_config_file(path: &Path) -> bool {
+    if path.is_dir() {
+        return false;
+    }
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) => {
+            for sup in SUPPORTED_EXTESIONS {
+                if sup.eq_ignore_ascii_case(ext) {
+                    return true;
+                }
+            }
+
+            log::error!(
+                "Unsupported file extension: \".{}\" in {}. Ignoring file.",
+                ext,
+                path.to_string_lossy()
+            );
+            debug_assert!(false);
+            false
+        }
+        _ => false,
+    }
+}
+
 pub fn load_config_with_conf_d<ConfigData>(
     root_config_filename: &str,
     ctype: config_io::ConfigRoot,
@@ -68,7 +98,8 @@ where
     if let Ok(paths_unsorted) = std::fs::read_dir(path_conf_d) {
         let mut paths: Vec<_> = paths_unsorted
             .filter_map(|r| match r {
-                Ok(entry) => Some(entry),
+                Ok(entry) if is_supported_config_file(&entry.path()) => Some(entry),
+                Ok(_other) => None,
                 Err(e) => {
                     error!("Failed to read conf.d directory: {e}");
                     None
@@ -115,10 +146,9 @@ pub struct AutoSettings {
     pub keyboard_sound_enabled: bool,
     pub upright_screen_fix: bool,
     pub double_cursor_fix: bool,
+    pub enable_watch: bool,
     pub sets_on_watch: bool,
     pub hide_grab_help: bool,
-    pub xr_click_sensitivity: f32,
-    pub xr_click_sensitivity_release: f32,
     pub allow_sliding: bool,
     pub focus_follows_mouse_mode: bool,
     pub left_handed_mouse: bool,
@@ -126,12 +156,22 @@ pub struct AutoSettings {
     pub block_game_input_ignore_watch: bool,
     pub block_poses_on_kbd_interaction: bool,
     pub space_drag_multiplier: f32,
+    pub watch_view_angle_min: f32,
+    pub watch_view_angle_max: f32,
     pub use_skybox: bool,
+    pub skybox_texture: Arc<str>,
     pub grid_opacity: f32,
     pub use_passthrough: bool,
     pub screen_render_down: bool,
     pub pointer_lerp_factor: f32,
     pub space_drag_unlocked: bool,
+    pub space_drag_affects_world: bool,
+    pub space_gravity_damping: f32,
+    pub space_gravity_enabled: bool,
+    pub space_gravity_fling_strength: f32,
+    pub space_gravity_gravity: f32,
+    pub space_gravity_ground_friction: f32,
+    pub space_gravity_floor_height: f32,
     pub space_rotate_unlocked: bool,
     pub clock_12h: bool,
     pub hide_username: bool,
@@ -141,9 +181,23 @@ pub struct AutoSettings {
     pub capture_method: CaptureMethod,
     pub keyboard_middle_click_mode: AltModifier,
     pub autostart_apps: Vec<WvrProcessLaunchParams>,
+    pub pinned_apps: Vec<PinnedApp>,
     pub handsfree_pointer: HandsfreePointer,
+    pub handsfree_alt_tab: HandsfreeAltTab,
     pub language: Option<Language>,
     pub chroma_key_params: ChromaKeyParams,
+    pub input_emulation_method: InputEmulationMethod,
+    pub tutorial_graduated: bool,
+    pub whisper_model: Arc<str>,
+    pub default_overlay_scale: f32,
+    pub color_palette: Arc<str>,
+    pub snap_angle_deg: f32,
+    pub wvr_mouse_acceleration: bool,
+    pub wvr_mouse_speed: f32,
+    pub wvr_input_capture: InputCaptureMethod,
+    pub default_curvature: f32,
+    pub default_opacity: f32,
+    pub default_positioning: DefaultPositioning,
 }
 
 fn get_settings_path() -> PathBuf {
@@ -167,10 +221,9 @@ pub fn save_settings(config: &GeneralConfig) -> anyhow::Result<()> {
         keyboard_sound_enabled: config.keyboard_sound_enabled,
         upright_screen_fix: config.upright_screen_fix,
         double_cursor_fix: config.double_cursor_fix,
+        enable_watch: config.enable_watch,
         sets_on_watch: config.sets_on_watch,
         hide_grab_help: config.hide_grab_help,
-        xr_click_sensitivity: config.xr_click_sensitivity,
-        xr_click_sensitivity_release: config.xr_click_sensitivity_release,
         allow_sliding: config.allow_sliding,
         focus_follows_mouse_mode: config.focus_follows_mouse_mode,
         left_handed_mouse: config.left_handed_mouse,
@@ -178,12 +231,22 @@ pub fn save_settings(config: &GeneralConfig) -> anyhow::Result<()> {
         block_game_input_ignore_watch: config.block_game_input_ignore_watch,
         block_poses_on_kbd_interaction: config.block_poses_on_kbd_interaction,
         space_drag_multiplier: config.space_drag_multiplier,
+        watch_view_angle_min: config.watch_view_angle_min,
+        watch_view_angle_max: config.watch_view_angle_max,
         use_skybox: config.use_skybox,
+        skybox_texture: config.skybox_texture.clone(),
         grid_opacity: config.grid_opacity,
         use_passthrough: config.use_passthrough,
         screen_render_down: config.screen_render_down,
         pointer_lerp_factor: config.pointer_lerp_factor,
         space_drag_unlocked: config.space_drag_unlocked,
+        space_drag_affects_world: config.space_drag_affects_world,
+        space_gravity_damping: config.space_gravity_damping,
+        space_gravity_enabled: config.space_gravity_enabled,
+        space_gravity_fling_strength: config.space_gravity_fling_strength,
+        space_gravity_gravity: config.space_gravity_gravity,
+        space_gravity_ground_friction: config.space_gravity_ground_friction,
+        space_gravity_floor_height: config.space_gravity_floor_height,
         space_rotate_unlocked: config.space_rotate_unlocked,
         clock_12h: config.clock_12h,
         hide_username: config.hide_username,
@@ -193,9 +256,23 @@ pub fn save_settings(config: &GeneralConfig) -> anyhow::Result<()> {
         capture_method: config.capture_method,
         keyboard_middle_click_mode: config.keyboard_middle_click_mode,
         autostart_apps: config.autostart_apps.clone(),
+        pinned_apps: config.pinned_apps.clone(),
         handsfree_pointer: config.handsfree_pointer,
+        handsfree_alt_tab: config.handsfree_alt_tab,
         language: config.language,
         chroma_key_params: config.chroma_key_params.clone(),
+        input_emulation_method: config.input_emulation_method,
+        tutorial_graduated: config.tutorial_graduated,
+        whisper_model: config.whisper_model.clone(),
+        default_overlay_scale: config.default_overlay_scale,
+        color_palette: config.color_palette.clone(),
+        snap_angle_deg: config.snap_angle_deg,
+        wvr_mouse_acceleration: config.wvr_mouse_acceleration,
+        wvr_mouse_speed: config.wvr_mouse_speed,
+        wvr_input_capture: config.wvr_input_capture,
+        default_curvature: config.default_curvature,
+        default_opacity: config.default_opacity,
+        default_positioning: config.default_positioning,
     };
 
     let json = serde_json::to_string_pretty(&conf).unwrap(); // want panic
@@ -210,7 +287,7 @@ pub fn save_settings(config: &GeneralConfig) -> anyhow::Result<()> {
 #[derive(Serialize)]
 pub struct AutoState {
     pub sets: Vec<SerializedWindowSet>,
-    pub global_set: SerializedWindowStates,
+    pub spawn_overlays: Vec<Arc<str>>,
     pub last_set: u32,
     pub attribs: AStrMap<Vec<BackendAttribValue>>,
 }
@@ -225,7 +302,7 @@ pub fn save_state(config: &GeneralConfig) -> anyhow::Result<()> {
     let conf = AutoState {
         sets: config.sets.clone(),
         last_set: config.last_set,
-        global_set: config.global_set.clone(),
+        spawn_overlays: config.spawn_overlays.clone(),
         attribs: config.attribs.clone(),
     };
 
@@ -234,4 +311,12 @@ pub fn save_state(config: &GeneralConfig) -> anyhow::Result<()> {
 
     log::info!("State was saved successfully.");
     Ok(())
+}
+
+pub fn none_if_0(val: f32) -> Option<f32> {
+    if val.abs() < f32::EPSILON {
+        None
+    } else {
+        Some(val)
+    }
 }

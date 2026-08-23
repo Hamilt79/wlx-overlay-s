@@ -1,17 +1,18 @@
 use std::{cell::RefCell, rc::Rc};
 
-use cosmic_text::{Attrs, AttrsList, Buffer, Metrics, Shaping, Wrap};
+use cosmic_text::{Attrs, AttrsList, BorrowedWithFontSystem, Buffer, Metrics, Shaping, Wrap};
 use slotmap::Key;
 use taffy::AvailableSpace;
 
 use crate::{
-	drawing::{self, Boundary, PrimitiveExtent},
+	color::{ParentColor, WguiColor, WguiColorName},
+	drawing::{self, PrimitiveExtent},
 	event::CallbackDataCommon,
 	globals::Globals,
 	i18n::Translation,
 	layout::{LayoutState, WidgetID},
+	palette::WguiColorPalette,
 	renderer_vk::text::TextStyle,
-	theme::WguiTheme,
 	widget::WidgetStateFlags,
 };
 
@@ -21,28 +22,30 @@ use super::{WidgetObj, WidgetState};
 pub struct WidgetLabelParams {
 	pub content: Translation,
 	pub style: TextStyle,
+	pub parent_color: ParentColor,
 }
+
+const DEFAULT_COLOR: WguiColor = WguiColorName::OnBackground.to_wgui_color();
 
 pub struct WidgetLabel {
 	id: WidgetID,
 
 	params: WidgetLabelParams,
 	buffer: Rc<RefCell<Buffer>>,
-	last_boundary: Boundary,
 }
 
 impl WidgetLabel {
 	pub fn create(state: &mut LayoutState, params: WidgetLabelParams) -> WidgetState {
-		WidgetLabel::create_ex(&mut state.globals.get(), &state.theme, params)
+		WidgetLabel::create_ex(&mut state.globals.get(), params)
 	}
 
-	pub fn create_ex(globals: &mut Globals, theme: &WguiTheme, mut params: WidgetLabelParams) -> WidgetState {
+	pub fn create_ex(globals: &mut Globals, mut params: WidgetLabelParams) -> WidgetState {
 		if params.style.color.is_none() {
-			params.style.color = Some(theme.text_color);
+			params.style.color = Some(DEFAULT_COLOR);
 		}
 
 		let metrics = Metrics::from(&params.style);
-		let attrs = Attrs::from(&params.style);
+		let attrs = params.style.to_attrs(&globals.palette);
 		let wrap = Wrap::from(&params.style);
 
 		let mut buffer = Buffer::new_empty(metrics);
@@ -64,10 +67,19 @@ impl WidgetLabel {
 			Box::new(Self {
 				params,
 				buffer: Rc::new(RefCell::new(buffer)),
-				last_boundary: Boundary::default(),
 				id: WidgetID::null(),
 			}),
 		)
+	}
+
+	fn with_buffer<F, R>(buffer: &Rc<RefCell<Buffer>>, globals: &Globals, func: F) -> R
+	where
+		F: FnOnce(BorrowedWithFontSystem<'_, Buffer>) -> R,
+	{
+		let mut font_system = globals.font_system.system.lock();
+		let mut buffer = buffer.borrow_mut();
+		let buffer = buffer.borrow_with(&mut font_system);
+		func(buffer)
 	}
 
 	// set text without layout/re-render update.
@@ -78,23 +90,23 @@ impl WidgetLabel {
 		}
 
 		self.params.content = translation;
-		let attrs = Attrs::from(&self.params.style);
-		let mut font_system = globals.font_system.system.lock();
+		let attrs = self.params.style.to_attrs(&globals.palette);
 
-		let mut buffer = self.buffer.borrow_mut();
-		buffer.set_rich_text(
-			&mut font_system,
-			[(self.params.content.generate(&mut globals.i18n_builtin).as_ref(), attrs)],
-			&Attrs::new(),
-			Shaping::Advanced,
-			self.params.style.align.map(Into::into),
-		);
+		let text = self.params.content.generate(&mut globals.i18n_builtin);
 
+		WidgetLabel::with_buffer(&self.buffer, globals, |mut buffer| {
+			buffer.set_rich_text(
+				[(text.as_ref(), attrs)],
+				&Attrs::new(),
+				Shaping::Advanced,
+				self.params.style.align.map(Into::into),
+			);
+		});
 		true
 	}
 
-	fn update_attrs(&mut self) {
-		let attrs = Attrs::from(&self.params.style);
+	fn update_attrs(&mut self, palette: &WguiColorPalette) {
+		let attrs = self.params.style.to_attrs(palette);
 		for line in &mut self.buffer.borrow_mut().lines {
 			line.set_attrs_list(AttrsList::new(&attrs));
 		}
@@ -109,12 +121,30 @@ impl WidgetLabel {
 		}
 	}
 
-	pub fn set_color(&mut self, common: &mut CallbackDataCommon, color: drawing::Color, apply_to_existing_text: bool) {
+	fn set_color_internal(&mut self, common: &mut CallbackDataCommon, color: WguiColor, apply_to_existing_text: bool) {
 		self.params.style.color = Some(color);
 		if apply_to_existing_text {
-			self.update_attrs();
+			self.update_attrs(&common.globals().palette);
 			common.mark_widget_dirty(self.id);
 		}
+	}
+
+	pub fn set_color(&mut self, common: &mut CallbackDataCommon, color: WguiColor, apply_to_existing_text: bool) {
+		if let Some(current_color) = &self.params.style.color
+			&& *current_color == color
+		{
+			// not changed
+			return;
+		}
+		self.set_color_internal(common, color, apply_to_existing_text);
+	}
+
+	pub const fn get_color(&self) -> WguiColor {
+		self.params.style.color.unwrap() // create_ex populates this
+	}
+
+	pub const fn parent_color(&self) -> ParentColor {
+		self.params.parent_color
 	}
 }
 
@@ -122,12 +152,9 @@ impl WidgetObj for WidgetLabel {
 	fn draw(&mut self, state: &mut super::DrawState, _params: &super::DrawParams) {
 		let boundary = drawing::Boundary::construct_relative(state.transform_stack);
 
-		if self.last_boundary != boundary {
-			self.last_boundary = boundary;
-			let mut font_system = state.globals.font_system.system.lock();
-			let mut buffer = self.buffer.borrow_mut();
-			buffer.set_size(&mut font_system, Some(boundary.size.x), Some(boundary.size.y));
-		}
+		WidgetLabel::with_buffer(&self.buffer, state.globals, |mut buffer| {
+			buffer.set_size(Some(boundary.size.x), Some(boundary.size.y));
+		});
 
 		state.primitives.push(drawing::RenderPrimitive::Text(
 			PrimitiveExtent {
@@ -135,7 +162,12 @@ impl WidgetObj for WidgetLabel {
 				transform: state.transform_stack.get().transform,
 			},
 			self.buffer.clone(),
-			self.params.style.shadow.clone(),
+			self
+				.params
+				.style
+				.shadow
+				.clone()
+				.map(|s| s.to_text_shadow(&state.globals.palette)),
 		));
 	}
 
@@ -152,22 +184,23 @@ impl WidgetObj for WidgetLabel {
 			AvailableSpace::Definite(width) => Some(width),
 		});
 
-		let wgui_font_system = &globals.font_system;
-		let mut font_system = wgui_font_system.system.lock();
-		let mut buffer = self.buffer.borrow_mut();
+		WidgetLabel::with_buffer(&self.buffer, globals, |mut buffer| {
+			buffer.set_size(width_constraint, None);
+			// Determine measured size of text
+			let (width, total_lines) = buffer.layout_runs().fold((0.0, 0usize), |(width, total_lines), run| {
+				(run.line_w.max(width), total_lines + 1)
+			});
+			let height = total_lines as f32 * buffer.metrics().line_height;
+			taffy::Size {
+				width: width + 1.0, /* f32 aliasing fix */
+				height,
+			}
+		})
+	}
 
-		buffer.set_size(&mut font_system, width_constraint, None);
-
-		// Determine measured size of text
-		let (width, total_lines) = buffer.layout_runs().fold((0.0, 0usize), |(width, total_lines), run| {
-			(run.line_w.max(width), total_lines + 1)
-		});
-		let height = total_lines as f32 * buffer.metrics().line_height;
-
-		taffy::Size {
-			width: width + 1.0, /* f32 aliasing fix */
-			height,
-		}
+	fn palette_updated(&mut self, common: &mut CallbackDataCommon) {
+		let cur_color = self.get_color();
+		self.set_color_internal(common, cur_color, true);
 	}
 
 	fn get_id(&self) -> WidgetID {
@@ -182,9 +215,9 @@ impl WidgetObj for WidgetLabel {
 		super::WidgetType::Label
 	}
 
-	fn debug_print(&self) -> String {
+	fn debug_print(&self, globals: &Globals) -> String {
 		let color = if let Some(color) = self.params.style.color {
-			format!("[color: {}]", color.debug_ansi_block())
+			format!("[color: {}]", color.resolve(&globals.palette).debug_ansi_block())
 		} else {
 			String::default()
 		};

@@ -9,7 +9,7 @@ use crate::{
 	drawing::{self},
 	font_config,
 	gfx::{WGfx, cmd::GfxCommandBuffer},
-	renderer_vk::image::{ImagePipeline, ImageRenderer},
+	renderer_vk::image::{ImagePipeline, ImageRenderer, ImageViewCache},
 };
 
 use super::{
@@ -62,6 +62,7 @@ impl RendererPass<'_> {
 		viewport: &mut Viewport,
 		cmd_buf: &mut GfxCommandBuffer,
 		text_atlas: &mut TextAtlas,
+		image_view_cache: &mut ImageViewCache,
 	) -> anyhow::Result<()> {
 		if self.submitted {
 			return Ok(());
@@ -95,7 +96,9 @@ impl RendererPass<'_> {
 
 		self.submitted = true;
 		self.rect_renderer.render(gfx, viewport, &vk_scissor, cmd_buf)?;
-		self.image_renderer.render(gfx, viewport, &vk_scissor, cmd_buf)?;
+		self
+			.image_renderer
+			.render(gfx, viewport, &vk_scissor, cmd_buf, image_view_cache)?;
 
 		{
 			let mut font_system = font_system.system.lock();
@@ -169,6 +172,7 @@ pub struct Context {
 	pub dirty: bool,
 	pixel_scale: f32,
 	empty_text: Rc<RefCell<Buffer>>,
+	image_cache: ImageViewCache,
 }
 
 pub struct ContextDrawResult {
@@ -187,6 +191,7 @@ impl Context {
 			pixel_scale,
 			dirty: true,
 			empty_text: Rc::new(RefCell::new(Buffer::new_empty(DEFAULT_METRICS))),
+			image_cache: ImageViewCache::new(),
 		})
 	}
 
@@ -241,6 +246,9 @@ impl Context {
 		let mut passes = Vec::<RendererPass>::new();
 		let mut needs_new_pass = true;
 		let mut cur_scissor: Option<drawing::Boundary> = None;
+
+		// drop unreferenced image views to avoid vram leaks
+		self.image_cache.retain(|_, v| v.content.strong_count() > 0);
 
 		for primitive in primitives {
 			if needs_new_pass {
@@ -339,6 +347,7 @@ impl Context {
 				&mut self.viewport,
 				cmd_buf,
 				&mut atlas.text_atlas,
+				&mut self.image_cache,
 			)?;
 		}
 

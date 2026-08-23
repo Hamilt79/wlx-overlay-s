@@ -1,30 +1,24 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
-use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
-
-use ashpd::desktop::{
-    PersistMode,
-    screencast::{CursorMode, Screencast, SourceType},
-};
-
-pub use ashpd::Error as AshpdError;
 
 use drm_fourcc::DrmFormat;
 use drm_fourcc::DrmFourcc;
 use drm_fourcc::DrmModifier;
 use pipewire as pw;
+use pipewire::context::ContextRc;
+use pipewire::main_loop::MainLoopRc;
+use pipewire::spa::buffer::meta::MetaVideoTransformValue;
+use pipewire::spa::buffer::meta::{MetaCursor, MetaHeader, MetaHeaderFlags, MetaVideoTransform};
+use pipewire::stream::StreamRc;
 use pw::spa;
 
+use pw::Error;
 use pw::properties::properties;
 use pw::stream::{Stream, StreamFlags};
-use pw::{Error, context::Context, main_loop::MainLoop};
 use spa::buffer::DataType;
-use spa::buffer::MetaData;
-use spa::buffer::MetaType;
 use spa::param::ParamType;
 use spa::param::video::VideoFormat;
 use spa::param::video::VideoInfoRaw;
@@ -42,93 +36,6 @@ use crate::frame::MouseMeta;
 use crate::frame::Transform;
 use crate::frame::WlxFrame;
 use crate::frame::{DmabufFrame, FramePlane, MemFdFrame, MemPtrFrame};
-
-#[derive(Debug, Clone)]
-pub struct PipewireStream {
-    pub node_id: u32,
-    pub position: Option<(i32, i32)>,
-    pub size: Option<(i32, i32)>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PipewireSelectScreenResult {
-    pub streams: Vec<PipewireStream>,
-    pub restore_token: Option<String>,
-}
-
-pub async fn pipewire_select_screen(
-    token: Option<&str>,
-    embed_mouse: bool,
-    screens_only: bool,
-    persist: bool,
-    multiple: bool,
-) -> Result<PipewireSelectScreenResult, AshpdError> {
-    static CURSOR_MODES: AtomicU32 = AtomicU32::new(0);
-
-    let proxy = Screencast::new().await?;
-    let session = proxy.create_session().await?;
-
-    let mut cursor_modes = CURSOR_MODES.load(Ordering::Relaxed);
-    if cursor_modes == 0 {
-        cursor_modes = proxy.get_property::<u32>("AvailableCursorModes").await?;
-
-        log::debug!("Available cursor modes: {cursor_modes:#x}");
-
-        // properly will be same system-wide, so race condition not a concern
-        CURSOR_MODES.store(cursor_modes, Ordering::Relaxed);
-    }
-
-    let cursor_mode = match embed_mouse {
-        true if cursor_modes & (CursorMode::Embedded as u32) != 0 => CursorMode::Embedded,
-        _ if cursor_modes & (CursorMode::Metadata as u32) != 0 => CursorMode::Metadata,
-        _ => CursorMode::Hidden,
-    };
-
-    log::debug!("Selected cursor mode: {cursor_mode:?}");
-
-    let source_type = if screens_only {
-        SourceType::Monitor.into()
-    } else {
-        SourceType::Monitor | SourceType::Window | SourceType::Virtual
-    };
-
-    let persist_mode = if persist {
-        PersistMode::ExplicitlyRevoked
-    } else {
-        PersistMode::DoNot
-    };
-
-    proxy
-        .select_sources(
-            &session,
-            cursor_mode,
-            source_type,
-            multiple,
-            token,
-            persist_mode,
-        )
-        .await?;
-
-    let response = proxy.start(&session, None).await?.response()?;
-
-    let streams: Vec<_> = response
-        .streams()
-        .iter()
-        .map(|stream| PipewireStream {
-            node_id: stream.pipe_wire_node_id(),
-            position: stream.position(),
-            size: stream.size(),
-        })
-        .collect();
-    if !streams.is_empty() {
-        return Ok(PipewireSelectScreenResult {
-            streams,
-            restore_token: response.restore_token().map(String::from),
-        });
-    }
-
-    Err(ashpd::Error::NoResponse)
-}
 
 #[derive(Default)]
 struct StreamData {
@@ -240,7 +147,7 @@ where
             match data.tx_ctrl.send(PwChangeRequest::Pause) {
                 Ok(_) => (),
                 Err(_) => {
-                    log::warn!("{}: disconnected, stopping stream", &self.name);
+                    log::warn!("{}: disconnected, stopping stream", self.name);
                 }
             }
         }
@@ -251,12 +158,12 @@ where
                 Ok(_) => {
                     log::debug!(
                         "{}: dropped {} old frames before resuming",
-                        &self.name,
+                        self.name,
                         data.rx_frame.try_iter().count()
                     );
                 }
                 Err(_) => {
-                    log::warn!("{}: disconnected, stopping stream", &self.name);
+                    log::warn!("{}: disconnected, stopping stream", self.name);
                 }
             }
         }
@@ -277,13 +184,13 @@ where
     U: Any,
     R: Any,
 {
-    log::debug!("{}: pipewire main_loop start", &name);
-    let main_loop = MainLoop::new(None)?;
-    let context = Context::new(&main_loop)?;
-    let core = context.connect(None)?;
+    log::debug!("{}: pipewire main_loop start", name);
+    let main_loop = MainLoopRc::new(None)?;
+    let context = ContextRc::new(&main_loop, None)?;
+    let core = context.connect_rc(None)?;
 
-    let stream = Stream::new(
-        &core,
+    let stream = StreamRc::new(
+        core,
         &name,
         properties! {
             *pw::keys::MEDIA_TYPE => "Video",
@@ -305,7 +212,7 @@ where
         .state_changed({
             let name = name.clone();
             move |_, _, old, new| {
-                log::info!("{}: stream state changed: {:?} -> {:?}", &name, old, new);
+                log::info!("{}: stream state changed: {:?} -> {:?}", name, old, new);
             }
         })
         .param_changed({
@@ -333,16 +240,16 @@ where
                     "SHM"
                 };
 
-                log::info!("{}: got {} video format:", &name, &kind);
+                log::info!("{}: got {} video format:", name, kind);
                 log::info!("  format: {} ({:?})", info.format().as_raw(), info.format());
                 log::info!("  size: {}x{}", info.size().width, info.size().height);
                 log::info!("  modifier: {}", info.modifier());
                 let Ok(params_bytes) = obj_to_bytes(get_buffer_params()) else {
-                    log::warn!("{}: failed to serialize buffer params", &name);
+                    log::warn!("{}: failed to serialize buffer params", name);
                     return;
                 };
                 let Some(params_pod) = Pod::from_bytes(&params_bytes) else {
-                    log::warn!("{}: failed to deserialize buffer params", &name);
+                    log::warn!("{}: failed to deserialize buffer params", name);
                     return;
                 };
 
@@ -362,7 +269,7 @@ where
 
                 let mut pods = [params_pod, header_pod, xform_pod];
                 if let Err(e) = stream.update_params(&mut pods) {
-                    log::error!("{}: failed to update params: {}", &name, e);
+                    log::error!("{}: failed to update params: {}", name, e);
                 }
             }
         })
@@ -377,40 +284,39 @@ where
                 }
 
                 if let Some(mut buffer) = maybe_buffer {
-                    if let MetaData::Header(header) = buffer.find_meta_data(MetaType::Header)
-                        && header.flags & spa::sys::SPA_META_HEADER_FLAG_CORRUPTED != 0
+                    if let Some(header) = buffer.find_meta::<MetaHeader>()
+                        && header.flags().contains(MetaHeaderFlags::CORRUPTED)
                     {
-                        log::warn!("{}: PipeWire buffer is corrupt.", &name);
+                        log::warn!("{}: PipeWire buffer is corrupt.", name);
                         return;
                     }
-                    if let MetaData::VideoTransform(transform) =
-                        buffer.find_meta_data(MetaType::VideoTransform)
-                    {
-                        format.transform = match transform.transform {
-                            spa::sys::SPA_META_TRANSFORMATION_None => Transform::Normal,
-                            spa::sys::SPA_META_TRANSFORMATION_90 => Transform::Rotated90,
-                            spa::sys::SPA_META_TRANSFORMATION_180 => Transform::Rotated180,
-                            spa::sys::SPA_META_TRANSFORMATION_270 => Transform::Rotated270,
-                            spa::sys::SPA_META_TRANSFORMATION_Flipped => Transform::Flipped,
-                            spa::sys::SPA_META_TRANSFORMATION_Flipped90 => Transform::Flipped90,
-                            spa::sys::SPA_META_TRANSFORMATION_Flipped180 => Transform::Flipped180,
-                            spa::sys::SPA_META_TRANSFORMATION_Flipped270 => Transform::Flipped270,
+
+                    if let Some(transform) = buffer.find_meta::<MetaVideoTransform>() {
+                        format.transform = match transform.transform() {
+                            MetaVideoTransformValue::NONE => Transform::Normal,
+                            MetaVideoTransformValue::ROTATED90 => Transform::Rotated90,
+                            MetaVideoTransformValue::ROTATED180 => Transform::Rotated180,
+                            MetaVideoTransformValue::ROTATED270 => Transform::Rotated270,
+                            MetaVideoTransformValue::FLIPPED => Transform::Flipped,
+                            MetaVideoTransformValue::FLIPPED90 => Transform::Flipped90,
+                            MetaVideoTransformValue::FLIPPED180 => Transform::Flipped180,
+                            MetaVideoTransformValue::FLIPPED270 => Transform::Flipped270,
                             _ => Transform::Undefined,
                         };
-                        log::debug!("{}: Transform: {:?}", &name, &format.transform);
+                        log::debug!("{}: Transform: {:?}", name, format.transform);
                     }
 
-                    let mouse_meta = match buffer.find_meta_data(MetaType::Cursor) {
-                        MetaData::Cursor(cursor) if cursor.id != 0 => Some(MouseMeta {
-                            x: cursor.position.x as f32 / format.width as f32,
-                            y: cursor.position.y as f32 / format.height as f32,
-                        }),
-                        _ => None,
-                    };
+                    let mouse_meta = buffer
+                        .find_meta::<MetaCursor>()
+                        .filter(|c| c.is_valid())
+                        .map(|c| MouseMeta {
+                            x: c.position().x as f32 / format.width as f32,
+                            y: c.position().y as f32 / format.height as f32,
+                        });
 
                     let datas = buffer.datas_mut();
                     if datas.is_empty() {
-                        log::debug!("{}: no data", &name);
+                        log::debug!("{}: no data", name);
                         return;
                     }
 
@@ -440,7 +346,7 @@ where
                                     Ok(_) => (),
                                     Err(mpsc::TrySendError::Full(_)) => (),
                                     Err(mpsc::TrySendError::Disconnected(_)) => {
-                                        log::warn!("{}: disconnected, stopping stream", &name);
+                                        log::warn!("{}: disconnected, stopping stream", name);
                                         let _ = stream.disconnect();
                                     }
                                 }
@@ -463,7 +369,7 @@ where
                                     Ok(_) => (),
                                     Err(mpsc::TrySendError::Full(_)) => (),
                                     Err(mpsc::TrySendError::Disconnected(_)) => {
-                                        log::warn!("{}: disconnected, stopping stream", &name);
+                                        log::warn!("{}: disconnected, stopping stream", name);
                                         let _ = stream.disconnect();
                                     }
                                 }
@@ -483,7 +389,7 @@ where
                                     Ok(_) => (),
                                     Err(mpsc::TrySendError::Full(_)) => (),
                                     Err(mpsc::TrySendError::Disconnected(_)) => {
-                                        log::warn!("{}: disconnected, stopping stream", &name);
+                                        log::warn!("{}: disconnected, stopping stream", name);
                                         let _ = stream.disconnect();
                                     }
                                 }
@@ -553,7 +459,7 @@ where
     });
 
     main_loop.run();
-    log::info!("{}: pipewire loop exited", &name);
+    log::info!("{}: pipewire loop exited", name);
     Ok::<(), Error>(())
 }
 

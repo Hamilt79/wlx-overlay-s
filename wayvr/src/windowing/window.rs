@@ -1,11 +1,11 @@
-use glam::{Affine3A, Mat3A, Quat, Vec3, Vec3A};
+use glam::{Affine3A, EulerRot, Mat3A, Quat, Vec3, Vec3A};
 use idmap_derive::IntegerId;
 use std::{f32::consts::PI, sync::Arc};
 use wlx_common::windowing::{OverlayWindowState, Positioning};
 
 use crate::{
     state::AppState,
-    subsystem::input::KeyboardFocus,
+    subsystem::input::InputFocus,
     windowing::{
         backend::{FrameMeta, OverlayBackend, RenderResources, ShouldRender},
         snap_upright,
@@ -57,10 +57,14 @@ pub enum OverlayCategory {
     Internal,
     Keyboard,
     Dashboard,
+    /// User-provided custom panels
     Panel,
+    /// Same as Panel but does not support Modify and Reload
+    BuiltInPanel,
     Screen,
     Mirror,
     WayVR,
+    Passthru,
 }
 
 pub struct OverlayWindowConfig {
@@ -73,7 +77,7 @@ pub struct OverlayWindowConfig {
     /// Order to draw overlays in. Overlays with higher numbers will be drawn over ones with lower numbers.
     pub z_order: u32,
     /// If set, hovering this overlay will cause the HID provider to switch focus.
-    pub keyboard_focus: Option<KeyboardFocus>,
+    pub input_focus: Option<InputFocus>,
     /// Category of the overlay, used by toolbox on the watch.
     pub category: OverlayCategory,
     /// Should the overlay be displayed on the next frame?
@@ -84,6 +88,8 @@ pub struct OverlayWindowConfig {
     pub dirty: bool,
     /// True if the window is showing the edit overlay
     pub editing: bool,
+    /// True if the window is being resized. Captures pointer hits even if not directly hit.
+    pub resizing: bool,
     /// Used by grab to pause following of HMD or other devices
     pub pause_movement: bool,
 }
@@ -99,12 +105,13 @@ impl OverlayWindowConfig {
             },
             active_state: None,
             z_order: 0,
-            keyboard_focus: None,
+            input_focus: None,
             category: OverlayCategory::Internal,
             show_on_spawn: false,
             global: false,
             dirty: true,
             editing: false,
+            resizing: false,
             pause_movement: false,
         }
     }
@@ -115,11 +122,11 @@ impl OverlayWindowConfig {
 
     /// only call this directly for `OverlayCategory::Internal`
     /// for anything else, use `OverlayTask::ToggleOverlay` instead
-    pub fn activate(&mut self, app: &mut AppState) {
+    pub fn activate(&mut self, app: &mut AppState, realign: bool) {
         log::debug!("activate {}", self.name.as_ref());
         self.dirty = true;
         self.active_state = Some(self.default_state.clone());
-        self.reset(app, true);
+        self.reset(app, realign);
     }
 
     /// only call this directly for `OverlayCategory::Internal`
@@ -146,29 +153,21 @@ impl OverlayWindowConfig {
         let cur_transform = state
             .saved_transform
             .unwrap_or(self.default_state.transform);
+        let scale = scalar_scale(&cur_transform);
 
-        let (parent_transform, lerp, align_to_hmd) = match state.positioning {
-            Positioning::FollowHead { lerp } => (app.input_state.hmd, lerp, false),
-            Positioning::FollowHand {
-                hand,
+        let (target_transform, lerp) = match state.positioning {
+            Positioning::FollowHead { lerp } => (app.input_state.hmd * cur_transform, lerp),
+            Positioning::FollowHand { hand, lerp } => (
+                app.input_state.pointers[hand as usize].pose * cur_transform,
                 lerp,
-                align_to_hmd,
-            } => (
-                app.input_state.pointers[hand as usize].pose,
-                lerp,
-                align_to_hmd,
             ),
-            Positioning::Anchored => (app.anchor, 1.0, false),
-            _ => return,
+            Positioning::Anchored => (app.anchor * cur_transform, 1.0),
+            Positioning::Static | Positioning::Floating => (state.transform, 1.0), // STAGE space
         };
-
-        let target_transform = parent_transform * cur_transform;
 
         state.transform = match lerp {
             1.0 => target_transform,
             lerp => {
-                let scale = target_transform.matrix3.x_axis.length();
-
                 let rot_from = Quat::from_mat3a(&state.transform.matrix3.div_scalar(scale));
                 let rot_to = Quat::from_mat3a(&target_transform.matrix3.div_scalar(scale));
 
@@ -186,8 +185,13 @@ impl OverlayWindowConfig {
             }
         };
 
-        if align_to_hmd {
-            realign(&mut state.transform, &app.input_state.hmd);
+        if state.align_to_hmd {
+            realign(
+                &mut state.transform,
+                &app.input_state.hmd,
+                scale,
+                app.session.config.snap_angle_deg,
+            );
         }
 
         self.dirty = true;
@@ -222,17 +226,15 @@ impl OverlayWindowConfig {
             .saved_transform
             .unwrap_or(self.default_state.transform);
 
-        let (parent_transform, align_to_hmd) = match state.positioning {
-            Positioning::Floating | Positioning::FollowHead { .. } => (app.input_state.hmd, false),
-            Positioning::FollowHand {
-                hand, align_to_hmd, ..
-            } => (app.input_state.pointers[hand as usize].pose, align_to_hmd),
-            Positioning::Anchored => (app.anchor, false),
+        let parent_transform = match state.positioning {
+            Positioning::Floating | Positioning::FollowHead { .. } => app.input_state.hmd,
+            Positioning::FollowHand { hand, .. } => app.input_state.pointers[hand as usize].pose,
+            Positioning::Anchored => app.anchor,
             Positioning::Static => {
                 if hard_reset {
-                    (app.input_state.hmd, false)
+                    app.input_state.hmd
                 } else {
-                    return;
+                    Affine3A::IDENTITY
                 }
             }
         };
@@ -243,14 +245,20 @@ impl OverlayWindowConfig {
 
         state.transform = parent_transform * cur_transform;
 
-        if align_to_hmd || (state.grabbable && hard_reset) {
-            realign(&mut state.transform, &app.input_state.hmd);
+        if state.align_to_hmd || (state.grabbable && hard_reset) {
+            let scale = scalar_scale(&cur_transform);
+            realign(
+                &mut state.transform,
+                &app.input_state.hmd,
+                scale,
+                app.session.config.snap_angle_deg,
+            );
         }
         self.dirty = true;
     }
 }
 
-pub fn realign(transform: &mut Affine3A, hmd: &Affine3A) {
+pub fn realign(transform: &mut Affine3A, hmd: &Affine3A, scale: f32, snap_angle: f32) {
     let to_hmd = hmd.translation - transform.translation;
     let up_dir: Vec3A;
 
@@ -277,16 +285,34 @@ pub fn realign(transform: &mut Affine3A, hmd: &Affine3A) {
         }
     }
 
-    let scale = transform.x_axis.length();
-
     let col_z = (transform.translation - hmd.translation).normalize();
     let col_y = up_dir;
     let col_x = col_y.cross(col_z);
     let col_y = col_z.cross(col_x).normalize();
     let col_x = col_x.normalize();
 
-    let rot = Mat3A::from_quat(Quat::from_axis_angle(Vec3::Y, PI));
-    transform.matrix3 = Mat3A::from_cols(col_x, col_y, col_z).mul_scalar(scale) * rot;
+    let flip = Mat3A::from_quat(Quat::from_axis_angle(Vec3::Y, PI));
+    let mut rotation = Mat3A::from_cols(col_x, col_y, col_z) * flip;
+
+    if snap_angle > f32::EPSILON {
+        let snap_step = snap_angle.to_radians();
+        let (yaw, pitch, roll) = rotation.to_euler(EulerRot::YXZ);
+
+        let pitch = (pitch / snap_step).round() * snap_step;
+        let roll = (roll / snap_step).round() * snap_step;
+
+        rotation = Mat3A::from_euler(EulerRot::YXZ, yaw, pitch, roll);
+    }
+
+    transform.matrix3 = rotation.mul_scalar(scale);
+}
+
+pub fn scalar_scale(a: &Affine3A) -> f32 {
+    let det = a.matrix3.determinant();
+    (a.matrix3.x_axis.length() * det.signum()
+        + a.matrix3.y_axis.length()
+        + a.matrix3.z_axis.length())
+        / 3.0
 }
 
 pub fn save_transform(state: &mut OverlayWindowState, app: &mut AppState) {
@@ -295,8 +321,35 @@ pub fn save_transform(state: &mut OverlayWindowState, app: &mut AppState) {
         Positioning::FollowHead { .. } => app.input_state.hmd,
         Positioning::FollowHand { hand, .. } => app.input_state.pointers[hand as usize].pose,
         Positioning::Anchored => snap_upright(app.anchor, Vec3A::Y),
-        Positioning::Static => return,
+        Positioning::Static => Affine3A::IDENTITY,
     };
 
     state.saved_transform = Some(parent_transform.inverse() * state.transform);
+}
+
+pub fn spawn_transform_from_parent(
+    parent: &Affine3A,
+    hmd: &Affine3A,
+    child_scale: f32,
+) -> Affine3A {
+    const LEFT: f32 = 0.08;
+    const DOWN: f32 = 0.08;
+    const CLOSER_TO_HMD: f32 = 0.06;
+
+    let x_axis = parent.x_axis.normalize();
+    let y_axis = parent.y_axis.normalize();
+    let z_axis = parent.z_axis.normalize();
+    let to_hmd = hmd.translation - parent.translation;
+    let toward_hmd = if z_axis.dot(to_hmd) >= 0.0 {
+        z_axis
+    } else {
+        -z_axis
+    };
+
+    let translation =
+        parent.translation - x_axis * LEFT - y_axis * DOWN + toward_hmd * CLOSER_TO_HMD;
+
+    let rotation = Quat::from_mat3a(&Mat3A::from_cols(x_axis, y_axis, z_axis));
+
+    Affine3A::from_scale_rotation_translation(Vec3::ONE * child_scale, rotation, translation.into())
 }

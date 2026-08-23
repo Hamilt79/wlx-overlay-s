@@ -1,12 +1,7 @@
-#![allow(dead_code)]
-use std::path::PathBuf;
-
-// TODO: Remove later
-use serde::{Deserialize, Serialize};
-use wlx_common::{async_executor::AsyncExecutor, config_io};
-
 use crate::util::networking::{self, WAYVR_SKYMAPS_ROOT, http_client};
-
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use wlx_common::config_io;
 pub type SkymapUuid = uuid::Uuid;
 
 #[derive(Copy, Clone, Serialize, Deserialize, Debug)]
@@ -72,10 +67,7 @@ impl SkymapCatalogEntryFiles {
 
 	// example result: "https://wayvr.org/skymaps/files/my_skymap_8k.dds"
 	pub fn get_url_from_res(&self, res: SkymapResolution) -> Option<String> {
-		let Some(filename) = self.get_filename_from_res(res) else {
-			return None;
-		};
-
+		let filename = self.get_filename_from_res(res)?;
 		Some(format!("{}/files/{}", WAYVR_SKYMAPS_ROOT, filename))
 	}
 
@@ -107,10 +99,7 @@ pub struct SkymapCatalogEntry {
 
 impl SkymapCatalogEntry {
 	pub fn get_destination_path(&self, resolution: SkymapResolution) -> Option<PathBuf> {
-		let Some(filename) = self.files.get_filename_from_res(resolution) else {
-			return None;
-		};
-
+		let filename = self.files.get_filename_from_res(resolution)?;
 		Some(config_io::get_skymaps_root().join(filename))
 	}
 
@@ -171,11 +160,11 @@ impl SkymapCatalog {
 	}
 }
 
-pub async fn request_catalog(executor: &AsyncExecutor) -> anyhow::Result<SkymapCatalog> {
+pub async fn request_catalog() -> anyhow::Result<SkymapCatalog> {
 	log::info!("Fetching skymap list");
 
-	let res = http_client::get_simple(executor, &format!("{}/catalog.json", networking::WAYVR_SKYMAPS_ROOT)).await?;
-	let catalog = res.as_json::<SkymapCatalog>()?;
+	let res = http_client::get_simple(&format!("{}/catalog.json", networking::WAYVR_SKYMAPS_ROOT)).await?;
+	let catalog = res.into_json::<SkymapCatalog>()?;
 	catalog.validate()?;
 
 	Ok(catalog)
