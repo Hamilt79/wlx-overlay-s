@@ -6,7 +6,7 @@ Changes on top of upstream WayVR:
   button, `space_move` reads the stick. Speed scales with how far you push it, past a
   configurable deadzone, and travel is horizontal along the direction you are facing. \
   Basically a speed hack \
-  The distance traveled survives a plain space reset and is only reset by the **Full playspace reset** button in Settings \
+  The distance traveled survives a plain space reset and is only reset by the **Full playspace reset** button in Settings 
 - `space_move` defaults to the left thumbstick on OpenXR; bind `space_boost` yourself under Settings -> Bindings.
 - On OpenVR both actions ship unbound, so bind them from SteamVR's controller binding UI.
 - **Space gravity toggle binding.** The `space_fling` action toggles upstream's space gravity on
